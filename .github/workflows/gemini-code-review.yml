@@ -138,6 +138,30 @@ jobs:
           REVIEW_STRATEGY: ${{ steps.pr-size.outputs.strategy }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # Helper: call Gemini API with exponential-backoff retry on 429/5xx
+          gemini_api_call() {
+            local url="$1" payload="$2"
+            local attempt delay http_code
+            delay=2
+            for attempt in 1 2 3; do
+              http_code=$(curl -s \
+                -o /tmp/gemini-resp.json \
+                -w '%{http_code}' \
+                "$url" -H 'Content-Type: application/json' -d "$payload" 2>/dev/null)
+              case "$http_code" in
+                200) cat /tmp/gemini-resp.json; return 0 ;;
+                429|500|502|503|504)
+                  echo "WARNING: Gemini API HTTP $http_code (attempt $attempt/3); retrying in ${delay}s..." >&2
+                  sleep "$delay"; delay=$((delay * 2)) ;;
+                *)
+                  echo "WARNING: Gemini API HTTP $http_code" >&2
+                  cat /tmp/gemini-resp.json; return 0 ;;
+              esac
+            done
+            echo "WARNING: Gemini API failed after 3 attempts (last HTTP $http_code)" >&2
+            cat /tmp/gemini-resp.json
+          }
+
           # Fetch PR metadata
           gh pr view "$PR_NUMBER" \
             --repo "$REPO" \
@@ -161,7 +185,20 @@ jobs:
           fi
           DIFF=$(cat /tmp/pr.diff)
 
-          # --- Phase 1: Narrative summary via Gemini Flash ---
+          # Filter non-code files before sending to Pro (lock files, compiled assets, data files)
+          python3 -c '
+          import sys, re
+          SKIP = re.compile(r"package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|Gemfile\.lock|poetry\.lock|composer\.lock|\.min\.(js|css)|\.csv$|\.tsv$")
+          skip = False
+          for line in sys.stdin:
+              if line.startswith("diff --git"):
+                  skip = bool(SKIP.search(line))
+              if not skip:
+                  sys.stdout.write(line)
+          ' < /tmp/pr.diff > /tmp/pr-focused.diff
+          DIFF_FOCUSED=$(cat /tmp/pr-focused.diff)
+
+          # --- Phase 1: Narrative summary via Gemini Flash (full diff for broad context) ---
           SUMMARY_PROMPT="You are an experienced engineering lead reviewing a pull request for your team.
           Write a concise narrative summary of these changes in exactly three paragraphs — no headers, no bullet points, no bold labels.
 
@@ -178,21 +215,21 @@ jobs:
           Write as a thoughtful colleague, not as a template-filling bot. Keep it under 200 words total.
           Do not include any markdown headers or code fences in your response."
 
-          FLASH_RESPONSE=$(curl -s \
+          FLASH_RESPONSE=$(gemini_api_call \
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}" \
-            -H "Content-Type: application/json" \
-            -d "$(jq -n --arg prompt "$SUMMARY_PROMPT" '{
+            "$(jq -n --arg prompt "$SUMMARY_PROMPT" '{
               contents: [{parts: [{text: $prompt}]}],
               generationConfig: {temperature: 0.3, maxOutputTokens: 512}
             }')")
 
           SUMMARY_TEXT=$(echo "$FLASH_RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null)
           if [ -z "$SUMMARY_TEXT" ]; then
-            echo "WARNING: Gemini Flash did not return a summary." >&2
-            SUMMARY_TEXT="_Narrative summary unavailable (Gemini Flash did not respond). See [workflow run]($RUN_URL) for details._"
+            FLASH_ERROR=$(echo "$FLASH_RESPONSE" | jq -r '.error | "[\(.code)] \(.message)" // "unknown error"' 2>/dev/null)
+            echo "ERROR: Gemini Flash API call failed: $FLASH_ERROR" >&2
+            exit 1
           fi
 
-          # --- Phase 2: Inline review via Gemini Pro (skipped for large PRs) ---
+          # --- Phase 2: Inline review via Gemini Pro (focused diff — code files only) ---
           INLINE_JSON="[]"
           if [ "${REVIEW_STRATEGY:-detailed}" = "summary" ]; then
             echo "PR too large (files: $FILES, lines: $LINES); skipping inline review." >&2
@@ -209,7 +246,7 @@ jobs:
           Constraint: Do not comment on stylistic preferences (tabs vs spaces, etc.) unless it violates a clear pattern in the existing code. Focus only on bugs, security, and significant correctness issues.
 
           Git Diff to Review:
-          ${DIFF}
+          ${DIFF_FOCUSED}
 
           Output Format: Return ONLY a valid JSON array. No markdown, no explanation, just the JSON.
           Each object must follow this schema:
@@ -225,10 +262,9 @@ jobs:
           Cap your response at 10 items. Prioritize Critical and High severity findings.
           Return ONLY the JSON array, nothing else."
 
-            PRO_RESPONSE=$(curl -s \
+            PRO_RESPONSE=$(gemini_api_call \
               "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${GEMINI_API_KEY}" \
-              -H "Content-Type: application/json" \
-              -d "$(jq -n --arg prompt "$INLINE_PROMPT" '{
+              "$(jq -n --arg prompt "$INLINE_PROMPT" '{
                 contents: [{parts: [{text: $prompt}]}],
                 generationConfig: {temperature: 0.1, maxOutputTokens: 4096}
               }')")
@@ -247,7 +283,8 @@ jobs:
                 echo "WARNING: Gemini Pro returned invalid JSON; skipping inline comments." >&2
               fi
             else
-              echo "WARNING: Gemini Pro did not return inline comments." >&2
+              PRO_ERROR=$(echo "$PRO_RESPONSE" | jq -r '.error | "[\(.code)] \(.message)" // "unknown error"' 2>/dev/null)
+              echo "WARNING: Gemini Pro API call failed: $PRO_ERROR" >&2
             fi
           fi
 
@@ -460,6 +497,30 @@ jobs:
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # Helper: call Gemini API with exponential-backoff retry on 429/5xx
+          gemini_api_call() {
+            local url="$1" payload="$2"
+            local attempt delay http_code
+            delay=2
+            for attempt in 1 2 3; do
+              http_code=$(curl -s \
+                -o /tmp/gemini-resp.json \
+                -w '%{http_code}' \
+                "$url" -H 'Content-Type: application/json' -d "$payload" 2>/dev/null)
+              case "$http_code" in
+                200) cat /tmp/gemini-resp.json; return 0 ;;
+                429|500|502|503|504)
+                  echo "WARNING: Gemini API HTTP $http_code (attempt $attempt/3); retrying in ${delay}s..." >&2
+                  sleep "$delay"; delay=$((delay * 2)) ;;
+                *)
+                  echo "WARNING: Gemini API HTTP $http_code" >&2
+                  cat /tmp/gemini-resp.json; return 0 ;;
+              esac
+            done
+            echo "WARNING: Gemini API failed after 3 attempts (last HTTP $http_code)" >&2
+            cat /tmp/gemini-resp.json
+          }
+
           # Fetch PR metadata (no local checkout — use gh with --repo for all access)
           gh pr view "$PR_NUMBER" \
             --repo "$REPO" \
@@ -490,7 +551,20 @@ jobs:
           fi
           DIFF=$(cat /tmp/pr.diff)
 
-          # --- Phase 1: Narrative summary via Gemini Flash ---
+          # Filter non-code files before sending to Pro (lock files, compiled assets, data files)
+          python3 -c '
+          import sys, re
+          SKIP = re.compile(r"package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|Gemfile\.lock|poetry\.lock|composer\.lock|\.min\.(js|css)|\.csv$|\.tsv$")
+          skip = False
+          for line in sys.stdin:
+              if line.startswith("diff --git"):
+                  skip = bool(SKIP.search(line))
+              if not skip:
+                  sys.stdout.write(line)
+          ' < /tmp/pr.diff > /tmp/pr-focused.diff
+          DIFF_FOCUSED=$(cat /tmp/pr-focused.diff)
+
+          # --- Phase 1: Narrative summary via Gemini Flash (full diff for broad context) ---
           SUMMARY_PROMPT="You are an experienced engineering lead reviewing a pull request for your team.
           Write a concise narrative summary of these changes in exactly three paragraphs — no headers, no bullet points, no bold labels.
 
@@ -507,21 +581,21 @@ jobs:
           Write as a thoughtful colleague, not as a template-filling bot. Keep it under 200 words total.
           Do not include any markdown headers or code fences in your response."
 
-          FLASH_RESPONSE=$(curl -s \
+          FLASH_RESPONSE=$(gemini_api_call \
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}" \
-            -H "Content-Type: application/json" \
-            -d "$(jq -n --arg prompt "$SUMMARY_PROMPT" '{
+            "$(jq -n --arg prompt "$SUMMARY_PROMPT" '{
               contents: [{parts: [{text: $prompt}]}],
               generationConfig: {temperature: 0.3, maxOutputTokens: 512}
             }')")
 
           SUMMARY_TEXT=$(echo "$FLASH_RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null)
           if [ -z "$SUMMARY_TEXT" ]; then
-            echo "WARNING: Gemini Flash did not return a summary." >&2
-            SUMMARY_TEXT="_Narrative summary unavailable (Gemini Flash did not respond). See [workflow run]($RUN_URL) for details._"
+            FLASH_ERROR=$(echo "$FLASH_RESPONSE" | jq -r '.error | "[\(.code)] \(.message)" // "unknown error"' 2>/dev/null)
+            echo "ERROR: Gemini Flash API call failed: $FLASH_ERROR" >&2
+            exit 1
           fi
 
-          # --- Phase 2: Inline review via Gemini Pro (skipped for large PRs) ---
+          # --- Phase 2: Inline review via Gemini Pro (focused diff — code files only) ---
           INLINE_JSON="[]"
           if [ "$REVIEW_STRATEGY" = "summary" ]; then
             echo "PR too large (files: $FILES, lines: $LINES); skipping inline review." >&2
@@ -538,7 +612,7 @@ jobs:
           Constraint: Do not comment on stylistic preferences (tabs vs spaces, etc.) unless it violates a clear pattern in the existing code. Focus only on bugs, security, and significant correctness issues.
 
           Git Diff to Review:
-          ${DIFF}
+          ${DIFF_FOCUSED}
 
           Output Format: Return ONLY a valid JSON array. No markdown, no explanation, just the JSON.
           Each object must follow this schema:
@@ -554,10 +628,9 @@ jobs:
           Cap your response at 10 items. Prioritize Critical and High severity findings.
           Return ONLY the JSON array, nothing else."
 
-            PRO_RESPONSE=$(curl -s \
+            PRO_RESPONSE=$(gemini_api_call \
               "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${GEMINI_API_KEY}" \
-              -H "Content-Type: application/json" \
-              -d "$(jq -n --arg prompt "$INLINE_PROMPT" '{
+              "$(jq -n --arg prompt "$INLINE_PROMPT" '{
                 contents: [{parts: [{text: $prompt}]}],
                 generationConfig: {temperature: 0.1, maxOutputTokens: 4096}
               }')")
@@ -576,7 +649,8 @@ jobs:
                 echo "WARNING: Gemini Pro returned invalid JSON; skipping inline comments." >&2
               fi
             else
-              echo "WARNING: Gemini Pro did not return inline comments." >&2
+              PRO_ERROR=$(echo "$PRO_RESPONSE" | jq -r '.error | "[\(.code)] \(.message)" // "unknown error"' 2>/dev/null)
+              echo "WARNING: Gemini Pro API call failed: $PRO_ERROR" >&2
             fi
           fi
 

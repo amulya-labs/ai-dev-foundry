@@ -90,12 +90,6 @@ else
         "Found stale --with-workflows reference"
 fi
 
-if grep -q 'download_gha_workflows()' "$MANAGE_SCRIPT"; then
-    assert "Function download_gha_workflows() exists" "pass"
-else
-    assert "Function download_gha_workflows() exists" "fail"
-fi
-
 if grep -q 'download_gha_workflow_templates()' "$MANAGE_SCRIPT"; then
     assert "Function download_gha_workflow_templates() exists" "pass"
 else
@@ -111,24 +105,98 @@ fi
 
 echo
 
-# ── download_gha_workflows explicit file downloads ──────────────────
+# ── Provider registry ───────────────────────────────────────────────
 
-echo "=== download_gha_workflows explicit file downloads ==="
+echo "=== Provider registry ==="
 
-# The function should explicitly download only the two Claude workflow files,
-# not use download_dir (which would fetch all files in the directory including ci.yml etc.)
-if grep -q 'for wf in claude.yml claude-code-review.yml' "$MANAGE_SCRIPT"; then
-    assert "download_gha_workflows fetches only claude.yml and claude-code-review.yml" "pass"
+if grep -q 'PROVIDER_CLAUDE_WORKFLOWS=' "$MANAGE_SCRIPT"; then
+    assert "PROVIDER_CLAUDE_WORKFLOWS is defined" "pass"
 else
-    assert "download_gha_workflows fetches only claude.yml and claude-code-review.yml" "fail" \
-        "Expected: for wf in claude.yml claude-code-review.yml"
+    assert "PROVIDER_CLAUDE_WORKFLOWS is defined" "fail" \
+        "Expected PROVIDER_CLAUDE_WORKFLOWS= in script"
 fi
 
-if ! grep -q 'download_dir ".github/workflows" ".github/workflows"' "$MANAGE_SCRIPT"; then
-    assert "download_gha_workflows does not use download_dir (avoids fetching ci.yml etc.)" "pass"
+if grep -q 'PROVIDER_CLAUDE_SECRET=' "$MANAGE_SCRIPT"; then
+    assert "PROVIDER_CLAUDE_SECRET is defined" "pass"
 else
-    assert "download_gha_workflows does not use download_dir (avoids fetching ci.yml etc.)" "fail" \
-        "Should not use download_dir for workflows — it would fetch all files in the directory"
+    assert "PROVIDER_CLAUDE_SECRET is defined" "fail" \
+        "Expected PROVIDER_CLAUDE_SECRET= in script"
+fi
+
+if grep -q 'PROVIDER_CLAUDE_LABEL=' "$MANAGE_SCRIPT"; then
+    assert "PROVIDER_CLAUDE_LABEL is defined" "pass"
+else
+    assert "PROVIDER_CLAUDE_LABEL is defined" "fail" \
+        "Expected PROVIDER_CLAUDE_LABEL= in script"
+fi
+
+if grep -q 'PROVIDER_GEMINI_WORKFLOWS=' "$MANAGE_SCRIPT"; then
+    assert "PROVIDER_GEMINI_WORKFLOWS is defined" "pass"
+else
+    assert "PROVIDER_GEMINI_WORKFLOWS is defined" "fail" \
+        "Expected PROVIDER_GEMINI_WORKFLOWS= in script"
+fi
+
+if grep -q 'PROVIDER_GEMINI_SECRET=' "$MANAGE_SCRIPT"; then
+    assert "PROVIDER_GEMINI_SECRET is defined" "pass"
+else
+    assert "PROVIDER_GEMINI_SECRET is defined" "fail" \
+        "Expected PROVIDER_GEMINI_SECRET= in script"
+fi
+
+if grep -q 'PROVIDER_GEMINI_LABEL=' "$MANAGE_SCRIPT"; then
+    assert "PROVIDER_GEMINI_LABEL is defined" "pass"
+else
+    assert "PROVIDER_GEMINI_LABEL is defined" "fail" \
+        "Expected PROVIDER_GEMINI_LABEL= in script"
+fi
+
+echo
+
+# ── Generic provider download function ─────────────────────────────
+
+echo "=== Generic provider download function ==="
+
+if grep -q 'download_provider_workflows()' "$MANAGE_SCRIPT"; then
+    assert "Function download_provider_workflows() exists" "pass"
+else
+    assert "Function download_provider_workflows() exists" "fail" \
+        "Expected download_provider_workflows() function in script"
+fi
+
+if ! grep -q 'download_gha_workflows()' "$MANAGE_SCRIPT"; then
+    assert "Function download_gha_workflows() is removed" "pass"
+else
+    assert "Function download_gha_workflows() is removed" "fail" \
+        "download_gha_workflows() should be replaced by download_provider_workflows()"
+fi
+
+if ! grep -q 'download_gha_gemini_workflows()' "$MANAGE_SCRIPT"; then
+    assert "Function download_gha_gemini_workflows() is removed" "pass"
+else
+    assert "Function download_gha_gemini_workflows() is removed" "fail" \
+        "download_gha_gemini_workflows() should be replaced by download_provider_workflows()"
+fi
+
+if grep -q 'for provider in' "$MANAGE_SCRIPT"; then
+    assert "Provider loop exists in download_all()" "pass"
+else
+    assert "Provider loop exists in download_all()" "fail" \
+        "Expected 'for provider in' loop in script"
+fi
+
+if grep -q 'PROVIDERS_ENABLED=()' "$MANAGE_SCRIPT"; then
+    assert "PROVIDERS_ENABLED=() is initialized" "pass"
+else
+    assert "PROVIDERS_ENABLED=() is initialized" "fail" \
+        "Expected PROVIDERS_ENABLED=() initialization in script"
+fi
+
+if ! grep -q 'PROVIDER_GEMINI=false' "$MANAGE_SCRIPT"; then
+    assert "PROVIDER_GEMINI=false is removed" "pass"
+else
+    assert "PROVIDER_GEMINI=false is removed" "fail" \
+        "PROVIDER_GEMINI=false should be removed in favor of PROVIDERS_ENABLED registry"
 fi
 
 echo
@@ -136,18 +204,6 @@ echo
 # ── download_all() behavior checks ───────────────────────────────────
 
 echo "=== download_all() behavior ==="
-
-# download_gha_workflows should be called unconditionally (not inside an if $WITH_GHA_WORKFLOWS block)
-# Extract the download_all() body and verify the call appears outside any conditional block
-download_all_body=$(sed -n '/^download_all()/,/^}/p' "$MANAGE_SCRIPT")
-conditional_block=$(echo "$download_all_body" | sed -n '/if \$WITH_GHA_WORKFLOWS/,/fi/p')
-if echo "$download_all_body" | grep -q 'download_gha_workflows$' && \
-   ! echo "$conditional_block" | grep -q 'download_gha_workflows$'; then
-    assert "download_gha_workflows is called unconditionally in download_all()" "pass"
-else
-    assert "download_gha_workflows is called unconditionally in download_all()" "fail" \
-        "download_gha_workflows should not be inside an if \$WITH_GHA_WORKFLOWS block"
-fi
 
 # download_gha_workflow_templates should be called conditionally
 if grep -B1 'download_gha_workflow_templates' "$MANAGE_SCRIPT" | grep -q 'if \$WITH_GHA_WORKFLOWS'; then
@@ -170,13 +226,6 @@ echo
 
 echo "=== Gemini provider support ==="
 
-if grep -q 'download_gha_gemini_workflows()' "$MANAGE_SCRIPT"; then
-    assert "Function download_gha_gemini_workflows() exists" "pass"
-else
-    assert "Function download_gha_gemini_workflows() exists" "fail" \
-        "Expected download_gha_gemini_workflows() function in script"
-fi
-
 if grep -q -- '--gemini)' "$MANAGE_SCRIPT"; then
     assert "Flag --gemini is recognized" "pass"
 else
@@ -192,9 +241,9 @@ else
 fi
 
 if grep -q 'gemini-code-review.yml' "$MANAGE_SCRIPT"; then
-    assert "download_gha_gemini_workflows references gemini-code-review.yml" "pass"
+    assert "Script references gemini-code-review.yml" "pass"
 else
-    assert "download_gha_gemini_workflows references gemini-code-review.yml" "fail" \
+    assert "Script references gemini-code-review.yml" "fail" \
         "Expected gemini-code-review.yml in script"
 fi
 
@@ -203,14 +252,6 @@ if grep -q 'GEMINI_API_KEY' "$MANAGE_SCRIPT"; then
 else
     assert "Script mentions GEMINI_API_KEY secret" "fail" \
         "Expected GEMINI_API_KEY hint for users in script"
-fi
-
-# download_gha_gemini_workflows should be called conditionally on PROVIDER_GEMINI
-if grep -B1 'download_gha_gemini_workflows' "$MANAGE_SCRIPT" | grep -q 'if \$PROVIDER_GEMINI'; then
-    assert "download_gha_gemini_workflows is called conditionally with PROVIDER_GEMINI" "pass"
-else
-    assert "download_gha_gemini_workflows is called conditionally with PROVIDER_GEMINI" "fail" \
-        "download_gha_gemini_workflows should be inside an if \$PROVIDER_GEMINI block"
 fi
 
 echo

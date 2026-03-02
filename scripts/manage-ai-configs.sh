@@ -25,8 +25,24 @@ API_BASE="https://api.github.com/repos/$REPO/contents"
 RAW_BASE="https://raw.githubusercontent.com/$REPO/$BRANCH"
 WITH_GHA_WORKFLOWS=false
 
-# Provider flags — set by --ai / --gemini flags (claude is always implied by the positional arg)
-PROVIDER_GEMINI=false
+# Provider registry — to add a new provider, add 3 lines here only
+# (Variables are referenced via indirect expansion in download_provider_workflows(); SC2034 is suppressed per-variable)
+# shellcheck disable=SC2034
+PROVIDER_CLAUDE_WORKFLOWS="claude.yml claude-code-review.yml"
+# shellcheck disable=SC2034
+PROVIDER_CLAUDE_SECRET="CLAUDE_CODE_OAUTH_TOKEN"
+# shellcheck disable=SC2034
+PROVIDER_CLAUDE_LABEL="Claude"
+
+# shellcheck disable=SC2034
+PROVIDER_GEMINI_WORKFLOWS="gemini-code-review.yml"
+# shellcheck disable=SC2034
+PROVIDER_GEMINI_SECRET="GEMINI_API_KEY"
+# shellcheck disable=SC2034
+PROVIDER_GEMINI_LABEL="Gemini"
+
+# Populated by flag parsing; positional 'claude' arg also adds "claude" here
+PROVIDERS_ENABLED=()
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -45,6 +61,13 @@ check_git() {
 
     # Make sure we're at repo root
     cd "$(git rev-parse --show-toplevel)"
+}
+
+contains() {
+    local needle="$1"; shift
+    local item
+    for item in "$@"; do [[ "$item" == "$needle" ]] && return 0; done
+    return 1
 }
 
 # Fetch list of files from a GitHub directory
@@ -98,48 +121,29 @@ download_dir() {
     fi
 }
 
-download_all() {
-    mkdir -p "$CLAUDE_DIR"
+download_provider_workflows() {
+    local provider="$1"
+    local upper
+    upper=$(printf '%s' "$provider" | tr '[:lower:]' '[:upper:]')
+    local workflows_var="PROVIDER_${upper}_WORKFLOWS"
+    local secret_var="PROVIDER_${upper}_SECRET"
+    local label_var="PROVIDER_${upper}_LABEL"
 
-    # Download agents
-    download_dir ".claude/agents" "$CLAUDE_DIR/agents"
-
-    # Download hooks
-    download_dir ".claude/hooks" "$CLAUDE_DIR/hooks"
-
-    # Make hook scripts executable
-    if [ -d "$CLAUDE_DIR/hooks" ]; then
-        chmod +x "$CLAUDE_DIR/hooks/"*.sh 2>/dev/null || true
-        chmod +x "$CLAUDE_DIR/hooks/"*.py 2>/dev/null || true
+    if [[ -z "${!workflows_var+x}" ]]; then
+        warn "Unknown provider '$provider' — no registry entry; skipping"
+        return 0
     fi
 
-    # Download settings.json
-    info "Fetching settings.json..."
-    if curl -fsSL "$RAW_BASE/.claude/settings.json" -o "$CLAUDE_DIR/settings.json" 2>/dev/null; then
-        info "  Downloaded settings.json"
-    else
-        warn "  settings.json not found (optional)"
-    fi
+    local label="${!label_var}"
+    local secret="${!secret_var}"
+    local workflows="${!workflows_var}"
+    local -a wf_list
+    read -ra wf_list <<< "$workflows"
 
-    # Always download Claude workflows
-    download_gha_workflows
-
-    # Download Gemini workflows if requested
-    if $PROVIDER_GEMINI; then
-        download_gha_gemini_workflows
-    fi
-
-    # Optionally download extra workflow templates
-    if $WITH_GHA_WORKFLOWS; then
-        download_gha_workflow_templates
-    fi
-}
-
-download_gha_workflows() {
-    info "Fetching Claude GitHub Actions workflows..."
+    info "Fetching ${label} GitHub Actions workflows..."
     local workflow_dir=".github/workflows"
     mkdir -p "$workflow_dir"
-    for wf in claude.yml claude-code-review.yml; do
+    for wf in "${wf_list[@]}"; do
         local url="$RAW_BASE/.github/workflows/$wf"
         if curl -fsSL "$url" -o "$workflow_dir/$wf" 2>/dev/null; then
             info "  Downloaded $wf"
@@ -147,20 +151,34 @@ download_gha_workflows() {
             warn "  Failed to download $wf"
         fi
     done
-    warn "Requires CLAUDE_CODE_OAUTH_TOKEN secret in your repo settings"
+    warn "Requires ${secret} secret in your repo settings"
 }
 
-download_gha_gemini_workflows() {
-    info "Fetching Gemini GitHub Actions workflows..."
-    local workflow_dir=".github/workflows"
-    mkdir -p "$workflow_dir"
-    local url="$RAW_BASE/.github/workflows/gemini-code-review.yml"
-    if curl -fsSL "$url" -o "$workflow_dir/gemini-code-review.yml" 2>/dev/null; then
-        info "  Downloaded gemini-code-review.yml"
-    else
-        warn "  Failed to download gemini-code-review.yml"
+download_all() {
+    # .claude/ dir is Claude-specific — only download when claude is enabled
+    if contains "claude" "${PROVIDERS_ENABLED[@]}"; then
+        mkdir -p "$CLAUDE_DIR"
+        download_dir ".claude/agents" "$CLAUDE_DIR/agents"
+        download_dir ".claude/hooks" "$CLAUDE_DIR/hooks"
+        if [ -d "$CLAUDE_DIR/hooks" ]; then
+            chmod +x "$CLAUDE_DIR/hooks/"*.sh 2>/dev/null || true
+            chmod +x "$CLAUDE_DIR/hooks/"*.py 2>/dev/null || true
+        fi
+        info "Fetching settings.json..."
+        if curl -fsSL "$RAW_BASE/.claude/settings.json" -o "$CLAUDE_DIR/settings.json" 2>/dev/null; then
+            info "  Downloaded settings.json"
+        else
+            warn "  settings.json not found (optional)"
+        fi
     fi
-    warn "Requires GEMINI_API_KEY secret in your repo settings"
+
+    for provider in "${PROVIDERS_ENABLED[@]}"; do
+        download_provider_workflows "$provider"
+    done
+
+    if $WITH_GHA_WORKFLOWS; then
+        download_gha_workflow_templates
+    fi
 }
 
 download_gha_workflow_templates() {
@@ -181,17 +199,21 @@ install_config() {
     echo ""
     download_all
 
-    git add "$CLAUDE_DIR"
+    if contains "claude" "${PROVIDERS_ENABLED[@]}"; then
+        git add "$CLAUDE_DIR"
+    fi
     git add .github/workflows/ 2>/dev/null || true
 
     echo ""
-    info "Done! Config installed to $CLAUDE_DIR"
-    info "Claude workflows installed to .github/workflows/"
-    warn "  → Workflows require CLAUDE_CODE_OAUTH_TOKEN secret in your repo settings"
-    if $PROVIDER_GEMINI; then
-        info "Gemini workflows installed to .github/workflows/"
-        warn "  → Gemini workflows require GEMINI_API_KEY secret in your repo settings"
-    fi
+    info "Done! Config installed."
+    for provider in "${PROVIDERS_ENABLED[@]}"; do
+        local upper
+        upper=$(printf '%s' "$provider" | tr '[:lower:]' '[:upper:]')
+        local label_var="PROVIDER_${upper}_LABEL"
+        local secret_var="PROVIDER_${upper}_SECRET"
+        info "${!label_var} workflows installed in .github/workflows/"
+        warn "  → Requires ${!secret_var} secret in your repo settings"
+    done
     if $WITH_GHA_WORKFLOWS; then
         info "Extra workflow templates installed to .github/workflows/"
     fi
@@ -204,7 +226,7 @@ install_config() {
 update_config() {
     check_git
 
-    if [ ! -d "$CLAUDE_DIR" ]; then
+    if contains "claude" "${PROVIDERS_ENABLED[@]}" && [ ! -d "$CLAUDE_DIR" ]; then
         error "Directory $CLAUDE_DIR not found. Use 'install' first."
     fi
 
@@ -212,17 +234,21 @@ update_config() {
     echo ""
     download_all
 
-    git add "$CLAUDE_DIR"
+    if contains "claude" "${PROVIDERS_ENABLED[@]}"; then
+        git add "$CLAUDE_DIR"
+    fi
     git add .github/workflows/ 2>/dev/null || true
 
     echo ""
     info "Done! Config updated."
-    info "Claude workflows updated in .github/workflows/"
-    warn "  → Workflows require CLAUDE_CODE_OAUTH_TOKEN secret in your repo settings"
-    if $PROVIDER_GEMINI; then
-        info "Gemini workflows updated in .github/workflows/"
-        warn "  → Gemini workflows require GEMINI_API_KEY secret in your repo settings"
-    fi
+    for provider in "${PROVIDERS_ENABLED[@]}"; do
+        local upper
+        upper=$(printf '%s' "$provider" | tr '[:lower:]' '[:upper:]')
+        local label_var="PROVIDER_${upper}_LABEL"
+        local secret_var="PROVIDER_${upper}_SECRET"
+        info "${!label_var} workflows updated in .github/workflows/"
+        warn "  → Requires ${!secret_var} secret in your repo settings"
+    done
     if $WITH_GHA_WORKFLOWS; then
         info "Extra workflow templates updated in .github/workflows/"
     fi
@@ -284,7 +310,7 @@ _shifted=()
 for arg in "$@"; do
     case "$arg" in
         --with-gha-workflows) WITH_GHA_WORKFLOWS=true ;;
-        --gemini)             PROVIDER_GEMINI=true ;;
+        --gemini)             PROVIDERS_ENABLED+=("gemini") ;;
         --ai)
             # --ai requires the next argument; handle below via index tracking
             # We use a sentinel so the next iteration picks up the value
@@ -295,11 +321,13 @@ for arg in "$@"; do
             _ai_val="${arg#--ai=}"
             IFS=',' read -ra _providers <<< "$_ai_val"
             for _p in "${_providers[@]}"; do
-                case "$_p" in
-                    claude) ;;  # always included via 'claude' positional arg
-                    gemini) PROVIDER_GEMINI=true ;;
-                    *) warn "Unknown provider '$_p' in --ai; ignoring" ;;
-                esac
+                _upper_p=$(printf '%s' "$_p" | tr '[:lower:]' '[:upper:]')
+                _wf_var="PROVIDER_${_upper_p}_WORKFLOWS"
+                if [[ -n "${!_wf_var+x}" ]]; then
+                    PROVIDERS_ENABLED+=("$_p")
+                else
+                    warn "Unknown provider '$_p' in --ai; ignoring"
+                fi
             done
             ;;
         *) _shifted+=("$arg") ;;
@@ -319,11 +347,13 @@ while [ $_i -lt ${#_args[@]} ]; do
             _ai_val="${_args[$_i]}"
             IFS=',' read -ra _providers <<< "$_ai_val"
             for _p in "${_providers[@]}"; do
-                case "$_p" in
-                    claude) ;;  # always included via 'claude' positional arg
-                    gemini) PROVIDER_GEMINI=true ;;
-                    *) warn "Unknown provider '$_p' in --ai; ignoring" ;;
-                esac
+                _upper_p=$(printf '%s' "$_p" | tr '[:lower:]' '[:upper:]')
+                _wf_var="PROVIDER_${_upper_p}_WORKFLOWS"
+                if [[ -n "${!_wf_var+x}" ]]; then
+                    PROVIDERS_ENABLED+=("$_p")
+                else
+                    warn "Unknown provider '$_p' in --ai; ignoring"
+                fi
             done
         else
             error "--ai requires a value (e.g. --ai claude,gemini)"
@@ -337,6 +367,17 @@ set -- "${_final[@]+"${_final[@]}"}"
 
 case "$AGENT" in
     claude)
+        # If --ai was not given, default to claude-only.
+        # If --ai was given, treat it as authoritative (supports "claude update --ai gemini" = Gemini-only).
+        if [ ${#PROVIDERS_ENABLED[@]} -eq 0 ]; then
+            PROVIDERS_ENABLED=("claude")
+        fi
+        # Deduplicate (preserve order, first occurrence wins)
+        _deduped=()
+        for _p in "${PROVIDERS_ENABLED[@]}"; do
+            if ! contains "$_p" "${_deduped[@]}"; then _deduped+=("$_p"); fi
+        done
+        PROVIDERS_ENABLED=("${_deduped[@]}")
         case "${1:-}" in
             install) install_config ;;
             update)  update_config ;;
