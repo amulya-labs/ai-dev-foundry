@@ -133,7 +133,24 @@ description = "gh api with jq"
 command = "gh pr comment 629 --repo owner/repo --body \"Review feedback summary\""
 description = "gh pr comment on a PR"
 
-# gh api POST to safe endpoints (comment replies, reactions)
+# gh issue close and comment: reversible/additive operations in allow.github_lifecycle
+[[allow]]
+command = "gh issue close 42 --comment \"Closing: resolved in #51\""
+description = "gh issue close with comment (reversible)"
+
+[[allow]]
+command = "gh issue close 123"
+description = "gh issue close (reversible; can be reopened)"
+
+[[allow]]
+command = "gh issue reopen 42"
+description = "gh issue reopen"
+
+[[allow]]
+command = "gh issue comment 99 --body \"See the linked PR for details.\""
+description = "gh issue comment (additive)"
+
+# gh api POST to safe endpoints (comment replies, reactions, issue/PR comments)
 [[allow]]
 command = "gh api -X POST repos/owner/repo/pulls/38/comments/2861609247/replies -f body=\"Looks good\""
 description = "gh api POST to comment reply (safe endpoint)"
@@ -142,7 +159,24 @@ description = "gh api POST to comment reply (safe endpoint)"
 command = "gh api repos/owner/repo/issues/comments/123/reactions -X POST -f content=\"+1\""
 description = "gh api POST to reaction (safe endpoint)"
 
-# gh api DELETE on /replies and /reactions must still prompt (deleting is destructive)
+[[allow]]
+command = "gh api repos/owner/repo/issues/123/comments -X POST -f body=\"Automated summary comment\""
+description = "gh api POST to issue comments (additive)"
+
+[[allow]]
+command = "gh api --method POST repos/owner/repo/issues/456/comments -f body=\"CI results\""
+description = "gh api --method POST to issue comments (additive)"
+
+[[allow]]
+command = "gh api repos/owner/repo/pulls/789/reviews -X POST -f event=COMMENT -f body=\"Review comment\""
+description = "gh api POST to pull request review (additive)"
+
+[[allow]]
+command = "gh api repos/owner/repo/pulls/10/comments -X POST -f body=\"inline comment\" -f commit_id=abc123 -f path=src/main.py -f line=42"
+description = "gh api POST to pull request inline comment (additive)"
+
+# gh api DELETE on safe endpoints must still prompt (deleting is destructive)
+# gh api POST to new resource creation (not a comment on an existing entity) must still prompt
 [[ask]]
 command = "gh api repos/owner/repo/issues/comments/123/reactions/456 -X DELETE"
 description = "gh api DELETE on reaction endpoint must still prompt"
@@ -150,6 +184,14 @@ description = "gh api DELETE on reaction endpoint must still prompt"
 [[ask]]
 command = "gh api repos/owner/repo/pulls/1/comments/2/replies/789 -X DELETE"
 description = "gh api DELETE on replies endpoint must still prompt"
+
+[[ask]]
+command = "gh api repos/owner/repo/issues -X POST -f title=\"New issue\" -f body=\"...\""
+description = "gh api POST to create new issue (not a comment) must still prompt"
+
+[[ask]]
+command = "gh api repos/owner/repo/pulls -X POST -f title=\"New PR\" -f head=branch -f base=main"
+description = "gh api POST to create new pull request must still prompt"
 
 [[allow]]
 command = "getent passwd root"
@@ -466,6 +508,32 @@ description = "k3s kubectl exec mysql"
 command = "kubectl exec -n trading postgres-postgresql-0 -- env PGPASSWORD=\"$PGPASSWORD\" psql -U postgres -d market_data -c \"SELECT unnest(enum_range(NULL::archivepartitionstatus)) AS value;\""
 description = "kubectl exec psql with env PGPASSWORD var and SELECT"
 
+# kubectl exec bash -c wrapper: standard pattern when PGPASSWORD must be set via command substitution
+[[allow]]
+command = "kubectl exec -n trading postgres-0 -- bash -c 'PGPASSWORD=$(kubectl get secret pgpass -o jsonpath={.data.password} | base64 -d) psql -U postgres -d mydb -c \"SELECT count(*) FROM orders;\"'"
+description = "kubectl exec bash -c with PGPASSWORD from secret substitution (safe SELECT)"
+
+[[allow]]
+command = "kubectl exec postgres-0 -- bash -c 'PGPASSWORD=mypassword psql -U postgres -d appdb -c \"\\dt\"'"
+description = "kubectl exec bash -c psql with literal PGPASSWORD"
+
+[[allow]]
+command = "k3s kubectl exec postgres-0 -- bash -c 'PGPASSWORD=secret psql -U postgres -d db -c \"SELECT 1\"'"
+description = "k3s kubectl exec bash -c psql"
+
+# kubectl exec with wget/curl for HTTP health checks and API endpoint inspection
+[[allow]]
+command = "kubectl exec -n monitoring prometheus-0 -- wget -qO- http://localhost:9090/metrics"
+description = "kubectl exec wget for metrics endpoint"
+
+[[allow]]
+command = "kubectl exec -n app api-pod-xyz -- curl -s http://localhost:8080/health"
+description = "kubectl exec curl for health check"
+
+[[allow]]
+command = "kubectl exec app-pod -- find /etc -name '*.conf'"
+description = "kubectl exec find for config file inspection"
+
 # Local data processing piped to interpreters (non-download sources are allowed)
 [[allow]]
 command = "cat file.json | python3 -c \"import json, sys; print(json.load(sys.stdin))\""
@@ -694,6 +762,31 @@ description = "bash -c unwrap: safe git command"
 [[allow]]
 command = "sh -c \"ls -la\""
 description = "sh -c unwrap: safe ls command"
+
+# User session and power profile queries (system_user_info)
+[[allow]]
+command = "who -b"
+description = "who -b (last system boot time)"
+
+[[allow]]
+command = "who -a"
+description = "who -a (all user sessions)"
+
+[[allow]]
+command = "last reboot | head -5"
+description = "last reboot piped to head (boot history)"
+
+[[allow]]
+command = "last -n 10"
+description = "last with count limit"
+
+[[allow]]
+command = "powerprofilesctl list"
+description = "powerprofilesctl list (read-only power profiles)"
+
+[[allow]]
+command = "powerprofilesctl get"
+description = "powerprofilesctl get (current power profile)"
 
 # Desktop/display environment info (system_inspection)
 [[allow]]
@@ -979,6 +1072,15 @@ description = "chain: absolute path exec + echo via &&"
 [[allow]]
 command = "/usr/bin/env python3 --version && echo 'python ready'"
 description = "chain: /usr/bin/env python + echo via &&"
+
+# --version mid-command (followed by pipe): allow.help_and_info uses \s variant
+[[allow]]
+command = "bash --version | head -1"
+description = "--version before pipe to head (mid-command)"
+
+[[allow]]
+command = "python3 --version 2>&1 | head -1"
+description = "--version before pipe with redirect"
 
 # Subshells in chains
 [[allow]]

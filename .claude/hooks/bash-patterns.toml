@@ -162,14 +162,13 @@ patterns = [
 ]
 
 [ask.github_mutations]
-description = "GitHub CLI operations that modify state"
+description = "GitHub CLI operations that modify state (irreversible or high-impact)"
 patterns = [
     "^gh pr merge",
     "^gh pr close",
     "^gh pr ready",
     "^gh repo delete",
     "^gh repo archive",
-    "^gh issue close",
     "^gh release delete",
     "^gh run cancel",
 ]
@@ -185,18 +184,21 @@ description = "GitHub API calls that mutate state (POST, PUT, PATCH, DELETE)"
 # Negative lookahead on POST-only variants excludes safe POST-only endpoints:
 #   /replies  — posting a reply comment (safe; DELETE would prompt)
 #   /reactions — adding a reaction (safe; DELETE would prompt)
-# DELETE, PUT, PATCH always ask even for /replies and /reactions endpoints,
-# since deleting or modifying comments is non-trivially destructive.
+#   issues/<N>/comments — posting a comment on an issue/PR (additive)
+#   pulls/<N>/comments — posting an inline PR review comment (additive)
+#   pulls/<N>/reviews — posting a PR review (additive; reviews can be dismissed)
+# DELETE, PUT, PATCH always ask even for these endpoints,
+# since deleting or modifying existing content is non-trivially destructive.
 # Flag-after-path: lookahead at start excludes safe paths in the URL.
 # Flag-before-path: lookahead after method excludes safe paths in trailing args.
 patterns = [
-    # POST with exemption for safe endpoints (/replies, /reactions)
-    "^gh api (?!.*/(replies|reactions)\\b).* -X POST",
-    "^gh api (?!.*/(replies|reactions)\\b).* -XPOST",
-    "^gh api (?!.*/(replies|reactions)\\b).* --method[= ]POST",
-    "^gh api -X POST(?!.*/(replies|reactions)\\b)",
-    "^gh api -XPOST(?!.*/(replies|reactions)\\b)",
-    "^gh api --method[= ]POST(?!.*/(replies|reactions)\\b)",
+    # POST with exemption for safe endpoints
+    "^gh api (?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/(?:comments|reviews))\\b).* -X POST",
+    "^gh api (?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/(?:comments|reviews))\\b).* -XPOST",
+    "^gh api (?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/(?:comments|reviews))\\b).* --method[= ]POST",
+    "^gh api -X POST(?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/(?:comments|reviews))\\b)",
+    "^gh api -XPOST(?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/(?:comments|reviews))\\b)",
+    "^gh api --method[= ]POST(?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/(?:comments|reviews))\\b)",
     # PUT, PATCH, DELETE always ask (no safe-endpoint exemption)
     "^gh api .* -X (PUT|PATCH|DELETE)",
     "^gh api .* -X(PUT|PATCH|DELETE)",
@@ -550,8 +552,10 @@ patterns = [
     "^bat",
     "^watch ",
     "^man ",
-    "--version$",
-    "--help$",
+    # Match --version/--help at end of command OR before a space/pipe suffix
+    # (e.g. 'bash --version | head -1' needs \s variant, not just $)
+    "--version(\\s|$)",
+    "--help(\\s|$)",
 ]
 
 [allow.c_cpp_toolchain]
@@ -744,6 +748,16 @@ patterns = [
     "^prime-select query",
 ]
 
+[allow.system_user_info]
+description = "User session and power profile queries (read-only)"
+# Common informational commands that appear in diagnostic sessions
+# but have no side effects and are not covered by existing allow lists.
+patterns = [
+    "^who\\b",
+    "^last\\b",
+    "^powerprofilesctl",
+]
+
 [allow.command_wrappers]
 description = "Command execution wrappers"
 patterns = [
@@ -772,6 +786,18 @@ description = "Git and GitHub CLI"
 patterns = [
     "^git ",
     "^gh ",
+]
+
+[allow.github_lifecycle]
+description = "GitHub CLI lifecycle operations that are reversible or purely additive"
+# gh issue close/reopen: trivially reversible (reopen restores the issue)
+# gh issue comment / gh pr comment: additive only, never destroys data
+# Note: gh pr merge, gh pr close, gh repo delete remain in ask.github_mutations
+patterns = [
+    "^gh issue close",
+    "^gh issue reopen",
+    "^gh issue comment",
+    "^gh pr comment",
 ]
 
 [allow.github_labels]
@@ -1194,6 +1220,32 @@ patterns = [
     "^k3s kubectl exec .* -- psql ",
     "^k3s kubectl exec .* -- env .* psql",
     "^k3s kubectl exec .* -- mysql ",
+]
+
+[allow.kubernetes_exec_shell_commands]
+description = "kubectl exec with bash -c wrappers and common read-only inner commands"
+# The bash -c wrapper is the standard Kubernetes pattern for setting env vars
+# (e.g. PGPASSWORD) before invoking a database client.
+# Safety: ask.kubectl_exec_db_mutations (evaluated before allow patterns) catches
+# destructive SQL (DROP, DELETE, INSERT, etc.) even through bash -c wrappers,
+# since its patterns use .* to match across the 'bash -c' prefix.
+# ask.dangerous_pipelines catches 'find.*-exec.*rm' and 'find.*-delete' patterns.
+# Only non-destructive operations reach these allow patterns.
+patterns = [
+    # bash -c wrapping psql with env var prefix (e.g. PGPASSWORD=$(kubectl get secret ...))
+    "kubectl exec .* -- bash -c '.*psql",
+    "kubectl exec .* -- bash -c \".*psql",
+    # HTTP health checks and API endpoint inspection inside pods
+    "kubectl exec .* -- wget ",
+    "kubectl exec .* -- curl ",
+    # File search inside pods (find.*-exec.*rm and find.*-delete caught by ask.dangerous_pipelines)
+    "kubectl exec .* -- find ",
+    # k3s variants
+    "k3s kubectl exec .* -- bash -c '.*psql",
+    "k3s kubectl exec .* -- bash -c \".*psql",
+    "k3s kubectl exec .* -- wget ",
+    "k3s kubectl exec .* -- curl ",
+    "k3s kubectl exec .* -- find ",
 ]
 
 [allow.secrets]
