@@ -189,19 +189,22 @@ description = "GitHub API calls that mutate state (POST, PUT, PATCH, DELETE)"
 #   /reactions — adding a reaction (safe; DELETE would prompt)
 #   issues/<N>/comments — posting a comment on an issue/PR (additive)
 #   pulls/<N>/comments — posting an inline PR review comment (additive)
-#   pulls/<N>/reviews — posting a PR review (additive; reviews can be dismissed)
+# pulls/<N>/reviews is intentionally NOT exempted: APPROVE and REQUEST_CHANGES
+# submissions are high-impact workflow actions affecting merge eligibility.
+# Use 'gh pr review --comment' (covered by the existing ^gh allow rule) for
+# posting review-level comments without an approval decision.
 # DELETE, PUT, PATCH always ask even for these endpoints,
 # since deleting or modifying existing content is non-trivially destructive.
 # Flag-after-path: lookahead at start excludes safe paths in the URL.
 # Flag-before-path: lookahead after method excludes safe paths in trailing args.
 patterns = [
     # POST with exemption for safe endpoints
-    "^gh api (?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/(?:comments|reviews))\\b).* -X POST",
-    "^gh api (?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/(?:comments|reviews))\\b).* -XPOST",
-    "^gh api (?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/(?:comments|reviews))\\b).* --method[= ]POST",
-    "^gh api -X POST(?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/(?:comments|reviews))\\b)",
-    "^gh api -XPOST(?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/(?:comments|reviews))\\b)",
-    "^gh api --method[= ]POST(?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/(?:comments|reviews))\\b)",
+    "^gh api (?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/comments)\\b).* -X POST",
+    "^gh api (?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/comments)\\b).* -XPOST",
+    "^gh api (?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/comments)\\b).* --method[= ]POST",
+    "^gh api -X POST(?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/comments)\\b)",
+    "^gh api -XPOST(?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/comments)\\b)",
+    "^gh api --method[= ]POST(?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/comments)\\b)",
     # PUT, PATCH, DELETE always ask (no safe-endpoint exemption)
     "^gh api .* -X (PUT|PATCH|DELETE)",
     "^gh api .* -X(PUT|PATCH|DELETE)",
@@ -398,6 +401,7 @@ patterns = [
     "xargs.*chmod",
     "xargs.*chown",
     "find.*-exec.*rm",
+    "find.*-exec.*mv",
     "find.*-exec.*chmod",
     "find.*-delete",
 ]
@@ -1285,12 +1289,17 @@ patterns = [
     # bash -c wrapping psql with env var prefix (e.g. PGPASSWORD=$(kubectl get secret ...))
     "kubectl exec .* -- bash -c '.*psql",
     "kubectl exec .* -- bash -c \".*psql",
-    # HTTP health checks and API endpoint inspection inside pods
+    # HTTP health checks and API endpoint inspection inside pods.
+    # Tradeoff: curl with -o/--output can write to arbitrary paths inside the pod.
+    # This is accepted because: (a) blast radius is pod-local, (b) the primary use
+    # case is health checks (curl http://localhost:8080/healthz) which far outweigh
+    # the file-write risk. Future: consider asking if '-o ' or '--output ' is present.
     "kubectl exec .* -- wget ",
     "kubectl exec .* -- curl ",
-    # File search inside pods (find.*-exec.*rm and find.*-delete caught by ask.dangerous_pipelines)
+    # File search inside pods (find.*-exec.*rm, find.*-exec.*mv, find.*-delete
+    # are caught by ask.dangerous_pipelines which is evaluated before allow patterns)
     "kubectl exec .* -- find ",
-    # k3s variants
+    # k3s variants (same tradeoffs apply as kubectl above)
     "k3s kubectl exec .* -- bash -c '.*psql",
     "k3s kubectl exec .* -- bash -c \".*psql",
     "k3s kubectl exec .* -- wget ",

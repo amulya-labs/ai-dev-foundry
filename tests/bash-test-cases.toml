@@ -168,12 +168,24 @@ command = "gh api --method POST repos/owner/repo/issues/456/comments -f body=\"C
 description = "gh api --method POST to issue comments (additive)"
 
 [[allow]]
-command = "gh api repos/owner/repo/pulls/789/reviews -X POST -f event=COMMENT -f body=\"Review comment\""
-description = "gh api POST to pull request review (additive)"
-
-[[allow]]
 command = "gh api repos/owner/repo/pulls/10/comments -X POST -f body=\"inline comment\" -f commit_id=abc123 -f path=src/main.py -f line=42"
 description = "gh api POST to pull request inline comment (additive)"
+
+# gh api POST to pulls/<N>/reviews must always prompt: APPROVE and REQUEST_CHANGES
+# directly affect merge eligibility and reviewer workflow. Even event=COMMENT
+# is a formal review submission that should be confirmed by the user.
+# Use 'gh pr review --comment' (covered by the ^gh allow rule) for comment-only reviews.
+[[ask]]
+command = "gh api repos/owner/repo/pulls/789/reviews -X POST -f event=COMMENT -f body=\"Review comment\""
+description = "gh api POST to pull request review with event=COMMENT must prompt"
+
+[[ask]]
+command = "gh api repos/owner/repo/pulls/789/reviews -X POST -f event=APPROVE"
+description = "gh api POST to pull request review with event=APPROVE must prompt"
+
+[[ask]]
+command = "gh api repos/owner/repo/pulls/789/reviews -X POST -f event=REQUEST_CHANGES -f body=\"Needs work\""
+description = "gh api POST to pull request review with event=REQUEST_CHANGES must prompt"
 
 # gh api DELETE on safe endpoints must still prompt (deleting is destructive)
 # gh api POST to new resource creation (not a comment on an existing entity) must still prompt
@@ -1425,7 +1437,15 @@ description = "kubectl exec sed -i (not in allow list)"
 
 [[ask]]
 command = "kubectl exec pod -- find /app -exec rm {} \\;"
-description = "kubectl exec find with -exec (not in allow list)"
+description = "kubectl exec find with -exec rm (caught by ask.dangerous_pipelines)"
+
+[[ask]]
+command = "kubectl exec pod -- find /var -exec mv {} /tmp/ \\;"
+description = "kubectl exec find with -exec mv (caught by ask.dangerous_pipelines)"
+
+[[ask]]
+command = "find /var -exec mv {} /tmp/ \\;"
+description = "find -exec mv (caught by ask.dangerous_pipelines)"
 
 # Security: whitespace bypass test
 [[ask]]
