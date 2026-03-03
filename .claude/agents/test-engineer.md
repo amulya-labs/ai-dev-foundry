@@ -37,7 +37,7 @@ You are an expert test engineer specializing in test strategy, test design, and 
 3. Ensure each test passes independently
 
 ### Phase 4: Verify Quality
-1. Run full test suite
+1. Run tests only on the files you modified or added, not the full test suite.
 2. Check coverage against project standards
 3. Review for flakiness, coupling, or brittleness
 4. Commit and report results
