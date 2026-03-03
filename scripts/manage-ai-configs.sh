@@ -17,22 +17,30 @@ set -e
 #   ./scripts/manage-ai-configs.sh claude install --gemini               # Claude + Gemini workflows
 #   ./scripts/manage-ai-configs.sh claude install --ai claude,gemini     # Same as above
 #   ./scripts/manage-ai-configs.sh claude update --ai gemini             # Update Gemini workflow only (no Claude .claude/ dir)
+#   ./scripts/manage-ai-configs.sh gemini install                        # Gemini workflows only
+#   ./scripts/manage-ai-configs.sh all install                           # All providers
 
 REPO="amulya-labs/ai-dev-foundry"
 BRANCH="main"
-CLAUDE_DIR=".claude"
 API_BASE="https://api.github.com/repos/$REPO/contents"
 RAW_BASE="https://raw.githubusercontent.com/$REPO/$BRANCH"
 WITH_GHA_WORKFLOWS=false
 
-# Provider registry — to add a new provider, add 3 lines here only
-# (Variables are referenced via indirect expansion in download_provider_workflows(); SC2034 is suppressed per-variable)
+# Provider registry — to add a new provider, add entries here only
+# (Variables are referenced via indirect expansion; SC2034 is suppressed per-variable)
 # shellcheck disable=SC2034
 PROVIDER_CLAUDE_WORKFLOWS="claude.yml claude-code-review.yml"
 # shellcheck disable=SC2034
 PROVIDER_CLAUDE_SECRET="CLAUDE_CODE_OAUTH_TOKEN"
 # shellcheck disable=SC2034
 PROVIDER_CLAUDE_LABEL="Claude"
+# Optional local config dir — omit if provider has no local config
+# shellcheck disable=SC2034
+PROVIDER_CLAUDE_CONFIG_DIR=".claude"
+# Optional space-separated list of items under the remote config dir to download
+# Supported item types: "agents" (dir), "hooks" (dir), "settings.json" (file)
+# shellcheck disable=SC2034
+PROVIDER_CLAUDE_CONFIG_ITEMS="agents hooks settings.json"
 
 # shellcheck disable=SC2034
 PROVIDER_GEMINI_WORKFLOWS="gemini-code-review.yml"
@@ -40,8 +48,9 @@ PROVIDER_GEMINI_WORKFLOWS="gemini-code-review.yml"
 PROVIDER_GEMINI_SECRET="GEMINI_API_KEY"
 # shellcheck disable=SC2034
 PROVIDER_GEMINI_LABEL="Gemini"
+# Gemini has no local config dir yet — leave unset
 
-# Populated by flag parsing; positional 'claude' arg also adds "claude" here
+# Populated by flag parsing; positional agent arg also adds entries here
 PROVIDERS_ENABLED=()
 
 RED='\033[0;31m'
@@ -68,6 +77,16 @@ contains() {
     local item
     for item in "$@"; do [[ "$item" == "$needle" ]] && return 0; done
     return 1
+}
+
+# Deduplicate PROVIDERS_ENABLED (preserve order, first occurrence wins)
+dedup_providers() {
+    local _deduped=()
+    local _p
+    for _p in "${PROVIDERS_ENABLED[@]}"; do
+        if ! contains "$_p" "${_deduped[@]}"; then _deduped+=("$_p"); fi
+    done
+    PROVIDERS_ENABLED=("${_deduped[@]}")
 }
 
 # Fetch list of files from a GitHub directory
@@ -154,25 +173,59 @@ download_provider_workflows() {
     warn "Requires ${secret} secret in your repo settings"
 }
 
-download_all() {
-    # .claude/ dir is Claude-specific — only download when claude is enabled
-    if contains "claude" "${PROVIDERS_ENABLED[@]}"; then
-        mkdir -p "$CLAUDE_DIR"
-        download_dir ".claude/agents" "$CLAUDE_DIR/agents"
-        download_dir ".claude/hooks" "$CLAUDE_DIR/hooks"
-        if [ -d "$CLAUDE_DIR/hooks" ]; then
-            chmod +x "$CLAUDE_DIR/hooks/"*.sh 2>/dev/null || true
-            chmod +x "$CLAUDE_DIR/hooks/"*.py 2>/dev/null || true
-        fi
-        info "Fetching settings.json..."
-        if curl -fsSL "$RAW_BASE/.claude/settings.json" -o "$CLAUDE_DIR/settings.json" 2>/dev/null; then
-            info "  Downloaded settings.json"
-        else
-            warn "  settings.json not found (optional)"
-        fi
+# Provider-specific post-download hook for Claude
+post_download_claude() {
+    local config_dir="$1"
+    if [ -d "${config_dir}/hooks" ]; then
+        chmod +x "${config_dir}/hooks/"*.sh 2>/dev/null || true
+        chmod +x "${config_dir}/hooks/"*.py 2>/dev/null || true
     fi
+}
 
+download_provider_config() {
+    local provider="$1"
+    local upper
+    upper=$(printf '%s' "$provider" | tr '[:lower:]' '[:upper:]')
+    local config_dir_var="PROVIDER_${upper}_CONFIG_DIR"
+    local config_items_var="PROVIDER_${upper}_CONFIG_ITEMS"
+
+    # Provider has no local config dir — nothing to download
+    [[ -z "${!config_dir_var+x}" ]] && return 0
+
+    local config_dir="${!config_dir_var}"
+    local config_items="${!config_items_var:-}"
+    local label_var="PROVIDER_${upper}_LABEL"
+    local label="${!label_var}"
+
+    info "Installing ${label} local config to ${config_dir}..."
+    mkdir -p "$config_dir"
+
+    local item
+    for item in $config_items; do
+        if [[ "$item" == *.* ]]; then
+            # Single file (e.g. settings.json)
+            info "Fetching ${item}..."
+            if curl -fsSL "$RAW_BASE/.${provider}/${item}" -o "${config_dir}/${item}" 2>/dev/null; then
+                info "  Downloaded ${item}"
+            else
+                warn "  ${item} not found (optional)"
+            fi
+        else
+            # Directory
+            download_dir ".${provider}/${item}" "${config_dir}/${item}"
+        fi
+    done
+
+    # Provider-specific post-download steps
+    local post_fn="post_download_${provider}"
+    if declare -f "$post_fn" > /dev/null 2>&1; then
+        "$post_fn" "$config_dir"
+    fi
+}
+
+download_all() {
     for provider in "${PROVIDERS_ENABLED[@]}"; do
+        download_provider_config "$provider"
         download_provider_workflows "$provider"
     done
 
@@ -191,26 +244,38 @@ download_gha_workflow_templates() {
 install_config() {
     check_git
 
-    if [ -d "$CLAUDE_DIR" ] && [ "$(ls -A "$CLAUDE_DIR" 2>/dev/null)" ]; then
-        error "Directory $CLAUDE_DIR already exists and is not empty. Use 'update' instead."
-    fi
+    # Check each provider's config dir independently
+    local _p _up _cdir_var _cdir
+    for _p in "${PROVIDERS_ENABLED[@]}"; do
+        _up=$(printf '%s' "$_p" | tr '[:lower:]' '[:upper:]')
+        _cdir_var="PROVIDER_${_up}_CONFIG_DIR"
+        if [[ -n "${!_cdir_var+x}" ]]; then
+            _cdir="${!_cdir_var}"
+            if [ -d "$_cdir" ] && [ "$(ls -A "$_cdir" 2>/dev/null)" ]; then
+                error "Directory $_cdir already exists and is not empty. Use 'update' instead."
+            fi
+        fi
+    done
 
-    info "Installing claude-code config to $CLAUDE_DIR..."
+    info "Installing AI Dev Foundry config..."
     echo ""
     download_all
 
-    if contains "claude" "${PROVIDERS_ENABLED[@]}"; then
-        git add "$CLAUDE_DIR"
-    fi
+    for _p in "${PROVIDERS_ENABLED[@]}"; do
+        _up=$(printf '%s' "$_p" | tr '[:lower:]' '[:upper:]')
+        _cdir_var="PROVIDER_${_up}_CONFIG_DIR"
+        if [[ -n "${!_cdir_var+x}" ]]; then
+            git add "${!_cdir_var}" 2>/dev/null || true
+        fi
+    done
     git add .github/workflows/ 2>/dev/null || true
 
     echo ""
     info "Done! Config installed."
-    for provider in "${PROVIDERS_ENABLED[@]}"; do
-        local upper
-        upper=$(printf '%s' "$provider" | tr '[:lower:]' '[:upper:]')
-        local label_var="PROVIDER_${upper}_LABEL"
-        local secret_var="PROVIDER_${upper}_SECRET"
+    for _p in "${PROVIDERS_ENABLED[@]}"; do
+        _up=$(printf '%s' "$_p" | tr '[:lower:]' '[:upper:]')
+        local label_var="PROVIDER_${_up}_LABEL"
+        local secret_var="PROVIDER_${_up}_SECRET"
         info "${!label_var} workflows installed in .github/workflows/"
         warn "  → Requires ${!secret_var} secret in your repo settings"
     done
@@ -219,33 +284,45 @@ install_config() {
     fi
     echo ""
     echo "Next steps:"
-    echo "  git commit -m 'Add claude-code config'"
+    echo "  git commit -m 'Add AI Dev Foundry config'"
     echo "  git push"
 }
 
 update_config() {
     check_git
 
-    if contains "claude" "${PROVIDERS_ENABLED[@]}" && [ ! -d "$CLAUDE_DIR" ]; then
-        error "Directory $CLAUDE_DIR not found. Use 'install' first."
-    fi
+    # Check each provider's config dir independently
+    local _p _up _cdir_var _cdir
+    for _p in "${PROVIDERS_ENABLED[@]}"; do
+        _up=$(printf '%s' "$_p" | tr '[:lower:]' '[:upper:]')
+        _cdir_var="PROVIDER_${_up}_CONFIG_DIR"
+        if [[ -n "${!_cdir_var+x}" ]]; then
+            _cdir="${!_cdir_var}"
+            if [ ! -d "$_cdir" ]; then
+                error "Directory $_cdir not found. Use 'install' first."
+            fi
+        fi
+    done
 
-    info "Updating claude-code config..."
+    info "Updating AI Dev Foundry config..."
     echo ""
     download_all
 
-    if contains "claude" "${PROVIDERS_ENABLED[@]}"; then
-        git add "$CLAUDE_DIR"
-    fi
+    for _p in "${PROVIDERS_ENABLED[@]}"; do
+        _up=$(printf '%s' "$_p" | tr '[:lower:]' '[:upper:]')
+        _cdir_var="PROVIDER_${_up}_CONFIG_DIR"
+        if [[ -n "${!_cdir_var+x}" ]]; then
+            git add "${!_cdir_var}" 2>/dev/null || true
+        fi
+    done
     git add .github/workflows/ 2>/dev/null || true
 
     echo ""
     info "Done! Config updated."
-    for provider in "${PROVIDERS_ENABLED[@]}"; do
-        local upper
-        upper=$(printf '%s' "$provider" | tr '[:lower:]' '[:upper:]')
-        local label_var="PROVIDER_${upper}_LABEL"
-        local secret_var="PROVIDER_${upper}_SECRET"
+    for _p in "${PROVIDERS_ENABLED[@]}"; do
+        _up=$(printf '%s' "$_p" | tr '[:lower:]' '[:upper:]')
+        local label_var="PROVIDER_${_up}_LABEL"
+        local secret_var="PROVIDER_${_up}_SECRET"
         info "${!label_var} workflows updated in .github/workflows/"
         warn "  → Requires ${!secret_var} secret in your repo settings"
     done
@@ -255,7 +332,7 @@ update_config() {
     echo ""
     echo "Next steps:"
     echo "  git diff --cached  # review changes"
-    echo "  git commit -m 'Update claude-code config'"
+    echo "  git commit -m 'Update AI Dev Foundry config'"
     echo "  git push"
 }
 
@@ -289,15 +366,74 @@ usage_claude() {
     echo "  Extra workflow templates from github-workflow-templates/"
 }
 
+usage_gemini() {
+    echo "Usage: $0 gemini <command> [options]"
+    echo ""
+    echo "Commands:"
+    echo "  install   Add Gemini workflow to your project (first-time setup)"
+    echo "  update    Pull the latest Gemini workflow"
+    echo ""
+    echo "This downloads:"
+    echo "  .github/workflows/gemini-code-review.yml - Gemini PR review (Flash + Pro)"
+    echo "  (requires GEMINI_API_KEY secret in your repo settings)"
+    echo ""
+    echo "Options:"
+    echo "  --with-gha-workflows   Also install extra workflow templates"
+}
+
+usage_all() {
+    echo "Usage: $0 all <command> [options]"
+    echo ""
+    echo "Commands:"
+    echo "  install   Install all provider configs and workflows"
+    echo "  update    Update all provider configs and workflows"
+    echo ""
+    echo "Equivalent to running install/update for every registered provider."
+    echo ""
+    echo "Registered providers:"
+    local _lvar _pname _plower
+    while IFS= read -r _lvar; do
+        _pname="${_lvar#PROVIDER_}"
+        _pname="${_pname%_LABEL}"
+        _plower=$(printf '%s' "$_pname" | tr '[:upper:]' '[:lower:]')
+        printf "  %-10s %s\n" "$_plower" "${!_lvar}"
+    done < <(compgen -v PROVIDER_ | grep '_LABEL$' | sort)
+    echo ""
+    echo "Options:"
+    echo "  --with-gha-workflows   Also install extra workflow templates"
+}
+
 usage_main() {
     echo "AI Dev Foundry Config Manager"
     echo ""
-    echo "Usage: $0 <agent> <command> [options]"
+    echo "Usage: $0 <provider> <command> [options]"
     echo ""
-    echo "Agents:"
-    echo "  claude    Manage Claude Code agents, hooks, and GitHub Actions workflows"
+    echo "Providers:"
+    local _lvar _pname _plower
+    while IFS= read -r _lvar; do
+        _pname="${_lvar#PROVIDER_}"
+        _pname="${_pname%_LABEL}"
+        _plower=$(printf '%s' "$_pname" | tr '[:upper:]' '[:lower:]')
+        printf "  %-10s %s\n" "$_plower" "${!_lvar} — config, hooks, and GitHub Actions workflows"
+    done < <(compgen -v PROVIDER_ | grep '_LABEL$' | sort)
+    printf "  %-10s %s\n" "all" "Install/update all providers at once"
     echo ""
-    echo "Run '$0 <agent>' for agent-specific usage."
+    echo "Commands:"
+    echo "  install   First-time setup — downloads config and workflows"
+    echo "  update    Pull the latest config from ai-dev-foundry"
+    echo ""
+    echo "Global options:"
+    echo "  --gemini               Also install Gemini workflows (with claude)"
+    echo "  --ai <providers>       Comma-separated provider list (e.g. claude,gemini)"
+    echo "  --with-gha-workflows   Also install extra workflow templates"
+    echo ""
+    echo "Quick start:"
+    echo "  $0 claude install            # Claude agents, hooks, settings + workflows"
+    echo "  $0 gemini install            # Gemini PR review workflow"
+    echo "  $0 all install               # All providers"
+    echo "  $0 claude install --gemini   # Claude + Gemini"
+    echo ""
+    echo "Run '$0 <provider>' for provider-specific usage."
 }
 
 # --- Main ---
@@ -372,16 +508,40 @@ case "$AGENT" in
         if [ ${#PROVIDERS_ENABLED[@]} -eq 0 ]; then
             PROVIDERS_ENABLED=("claude")
         fi
-        # Deduplicate (preserve order, first occurrence wins)
-        _deduped=()
-        for _p in "${PROVIDERS_ENABLED[@]}"; do
-            if ! contains "$_p" "${_deduped[@]}"; then _deduped+=("$_p"); fi
-        done
-        PROVIDERS_ENABLED=("${_deduped[@]}")
+        dedup_providers
         case "${1:-}" in
             install) install_config ;;
             update)  update_config ;;
             *)       usage_claude; exit 1 ;;
+        esac
+        ;;
+    gemini)
+        if [ ${#PROVIDERS_ENABLED[@]} -eq 0 ]; then
+            PROVIDERS_ENABLED=("gemini")
+        fi
+        dedup_providers
+        case "${1:-}" in
+            install) install_config ;;
+            update)  update_config ;;
+            *)       usage_gemini; exit 1 ;;
+        esac
+        ;;
+    all)
+        if [ ${#PROVIDERS_ENABLED[@]} -eq 0 ]; then
+            _wf_var=""
+            _pname=""
+            while IFS= read -r _wf_var; do
+                _pname="${_wf_var#PROVIDER_}"
+                _pname="${_pname%_WORKFLOWS}"
+                _pname=$(printf '%s' "$_pname" | tr '[:upper:]' '[:lower:]')
+                PROVIDERS_ENABLED+=("$_pname")
+            done < <(compgen -v PROVIDER_ | grep '_WORKFLOWS$' | sort)
+        fi
+        dedup_providers
+        case "${1:-}" in
+            install) install_config ;;
+            update)  update_config ;;
+            *)       usage_all; exit 1 ;;
         esac
         ;;
     *)

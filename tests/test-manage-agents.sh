@@ -256,6 +256,102 @@ fi
 
 echo
 
+# ── 'all' keyword support ───────────────────────────────────────────
+
+echo "=== 'all' keyword support ==="
+
+if grep -q "^    all)" "$MANAGE_SCRIPT" || grep -q "^all)" "$MANAGE_SCRIPT"; then
+    assert "Agent 'all' is handled in main case" "pass"
+else
+    assert "Agent 'all' is handled in main case" "fail" \
+        "Expected all) case branch in main case statement"
+fi
+
+if grep -q 'usage_all()' "$MANAGE_SCRIPT"; then
+    assert "usage_all() function exists" "pass"
+else
+    assert "usage_all() function exists" "fail"
+fi
+
+if grep -q 'compgen -v PROVIDER_' "$MANAGE_SCRIPT"; then
+    assert "all) uses compgen -v PROVIDER_ for dynamic provider discovery" "pass"
+else
+    assert "all) uses compgen -v PROVIDER_ for dynamic provider discovery" "fail" \
+        "Expected compgen -v PROVIDER_ for registry-based discovery"
+fi
+
+echo
+
+# ── 'gemini' top-level agent ─────────────────────────────────────────
+
+echo "=== 'gemini' top-level agent ==="
+
+if grep -q "^    gemini)" "$MANAGE_SCRIPT" || grep -q "^gemini)" "$MANAGE_SCRIPT"; then
+    assert "Agent 'gemini' is handled in main case" "pass"
+else
+    assert "Agent 'gemini' is handled in main case" "fail" \
+        "Expected gemini) case branch in main case statement"
+fi
+
+if grep -q 'usage_gemini()' "$MANAGE_SCRIPT"; then
+    assert "usage_gemini() function exists" "pass"
+else
+    assert "usage_gemini() function exists" "fail"
+fi
+
+echo
+
+# ── Provider registry CONFIG_DIR extension ───────────────────────────
+
+echo "=== Provider registry CONFIG_DIR extension ==="
+
+if grep -q 'PROVIDER_CLAUDE_CONFIG_DIR=' "$MANAGE_SCRIPT"; then
+    assert "PROVIDER_CLAUDE_CONFIG_DIR is defined" "pass"
+else
+    assert "PROVIDER_CLAUDE_CONFIG_DIR is defined" "fail" \
+        "Expected PROVIDER_CLAUDE_CONFIG_DIR= in script"
+fi
+
+if grep -q 'PROVIDER_CLAUDE_CONFIG_ITEMS=' "$MANAGE_SCRIPT"; then
+    assert "PROVIDER_CLAUDE_CONFIG_ITEMS is defined" "pass"
+else
+    assert "PROVIDER_CLAUDE_CONFIG_ITEMS is defined" "fail" \
+        "Expected PROVIDER_CLAUDE_CONFIG_ITEMS= in script"
+fi
+
+if grep -q 'download_provider_config()' "$MANAGE_SCRIPT"; then
+    assert "download_provider_config() function exists" "pass"
+else
+    assert "download_provider_config() function exists" "fail"
+fi
+
+if grep -q 'post_download_claude()' "$MANAGE_SCRIPT"; then
+    assert "post_download_claude() post-hook exists" "pass"
+else
+    assert "post_download_claude() post-hook exists" "fail"
+fi
+
+echo
+
+# ── usage_main() quality ─────────────────────────────────────────────
+
+echo "=== usage_main() quality ==="
+
+if grep -A40 'usage_main()' "$MANAGE_SCRIPT" | grep -q 'Quick start'; then
+    assert "usage_main() includes Quick start section" "pass"
+else
+    assert "usage_main() includes Quick start section" "fail" \
+        "Expected 'Quick start:' in usage_main()"
+fi
+
+if grep -A30 'usage_main()' "$MANAGE_SCRIPT" | grep -q 'all install'; then
+    assert "usage_main() shows 'all install' example" "pass"
+else
+    assert "usage_main() shows 'all install' example" "fail"
+fi
+
+echo
+
 # ── shellcheck ──────────────────────────────────────────────────────
 
 echo "=== shellcheck ==="
