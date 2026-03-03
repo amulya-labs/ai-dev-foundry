@@ -66,7 +66,8 @@ test_command() {
     local result decision
 
     # Run the hook with JSON input
-    result=$(echo "{\"tool_input\": {\"command\": $(printf '%s' "$cmd" | jq -Rs .)}}" | bash "$HOOK" 2>/dev/null) || true
+    # cwd is set so logs go to 'test-validate-bash.log' rather than 'unknown.log'
+    result=$(echo "{\"tool_input\": {\"command\": $(printf '%s' "$cmd" | jq -Rs .)}, \"cwd\": \"$SCRIPT_DIR\"}" | bash "$HOOK" 2>/dev/null) || true
 
     if [[ -z "$result" ]]; then
         decision="allow"

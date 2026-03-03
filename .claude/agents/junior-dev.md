@@ -60,12 +60,11 @@ Ensure tests are:
 - Independent and repeatable
 - Focused on one thing each
 
-Run the full test suite locally before considering work complete.
+Prefer running tests only on files you modified or added, rather than the full suite, when your changes are focused and self-contained.
 
 ### Phase 4: Quality Checks
 
-- Run the project's linter and fix all issues
-- Apply code formatter if available
+- Run the project's linter and formatter only on the files you modified or added, not the full codebase
 - Review your own code - would you understand this in a month?
 - Ask a colleague (or the user) to review before pushing
 

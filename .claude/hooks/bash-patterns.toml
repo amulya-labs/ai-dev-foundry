@@ -21,6 +21,9 @@ patterns = [
     "^sudo ",
     "^su ",
     "^doas ",
+    # Absolute path bypass: blocks '/usr/bin/sudo bash' which starts with '/' not 'sudo'
+    "/usr/bin/sudo ",
+    "/bin/su ",
 ]
 
 [deny.catastrophic_deletion]
@@ -162,14 +165,13 @@ patterns = [
 ]
 
 [ask.github_mutations]
-description = "GitHub CLI operations that modify state"
+description = "GitHub CLI operations that modify state (irreversible or high-impact)"
 patterns = [
     "^gh pr merge",
     "^gh pr close",
     "^gh pr ready",
     "^gh repo delete",
     "^gh repo archive",
-    "^gh issue close",
     "^gh release delete",
     "^gh run cancel",
 ]
@@ -185,18 +187,24 @@ description = "GitHub API calls that mutate state (POST, PUT, PATCH, DELETE)"
 # Negative lookahead on POST-only variants excludes safe POST-only endpoints:
 #   /replies  — posting a reply comment (safe; DELETE would prompt)
 #   /reactions — adding a reaction (safe; DELETE would prompt)
-# DELETE, PUT, PATCH always ask even for /replies and /reactions endpoints,
-# since deleting or modifying comments is non-trivially destructive.
+#   issues/<N>/comments — posting a comment on an issue/PR (additive)
+#   pulls/<N>/comments — posting an inline PR review comment (additive)
+# pulls/<N>/reviews is intentionally NOT exempted: APPROVE and REQUEST_CHANGES
+# submissions are high-impact workflow actions affecting merge eligibility.
+# Use 'gh pr review --comment' (covered by the existing ^gh allow rule) for
+# posting review-level comments without an approval decision.
+# DELETE, PUT, PATCH always ask even for these endpoints,
+# since deleting or modifying existing content is non-trivially destructive.
 # Flag-after-path: lookahead at start excludes safe paths in the URL.
 # Flag-before-path: lookahead after method excludes safe paths in trailing args.
 patterns = [
-    # POST with exemption for safe endpoints (/replies, /reactions)
-    "^gh api (?!.*/(replies|reactions)\\b).* -X POST",
-    "^gh api (?!.*/(replies|reactions)\\b).* -XPOST",
-    "^gh api (?!.*/(replies|reactions)\\b).* --method[= ]POST",
-    "^gh api -X POST(?!.*/(replies|reactions)\\b)",
-    "^gh api -XPOST(?!.*/(replies|reactions)\\b)",
-    "^gh api --method[= ]POST(?!.*/(replies|reactions)\\b)",
+    # POST with exemption for safe endpoints
+    "^gh api (?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/comments)\\b).* -X POST",
+    "^gh api (?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/comments)\\b).* -XPOST",
+    "^gh api (?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/comments)\\b).* --method[= ]POST",
+    "^gh api -X POST(?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/comments)\\b)",
+    "^gh api -XPOST(?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/comments)\\b)",
+    "^gh api --method[= ]POST(?!.*/(?:replies|reactions|issues/[^/]+/comments|pulls/[^/]+/comments)\\b)",
     # PUT, PATCH, DELETE always ask (no safe-endpoint exemption)
     "^gh api .* -X (PUT|PATCH|DELETE)",
     "^gh api .* -X(PUT|PATCH|DELETE)",
@@ -372,17 +380,20 @@ patterns = [
 ]
 
 [ask.file_deletion]
-description = "File removal targeting absolute system paths (outside /tmp)"
-# Only ask when rm targets absolute paths (starting with /) that are NOT /tmp/.
-# Relative-path rm (project files, build artifacts) is allowed by allow.file_deletion_relative.
+description = "File removal targeting absolute system paths (outside /tmp and current git repo)"
+# Ask when rm targets absolute paths that are NOT:
+#   /tmp/ or /var/tmp/  — temp files (covered by allow.temp_cleanup)
+#   current git repo    — injected dynamically at runtime by _inject_git_root_patterns()
+#                         when Claude is opened inside a git project (cwd has .git)
+# Relative-path rm is allowed by allow.file_deletion_relative.
 # Catastrophic rm (/, ~, *, .) is blocked by deny.catastrophic_deletion.
 patterns = [
-    # rm -r/-rf/-ri/-rfi + absolute path (not /tmp/)
-    "^rm\\s+(-[a-zA-Z]*r[a-zA-Z]*\\s+)+/(?!tmp/)",
-    # rm -f/-fi + absolute path (not /tmp/)
-    "^rm\\s+(-[a-zA-Z]*f[a-zA-Z]*\\s+)+/(?!tmp/)",
-    # bare rm + absolute path (not /tmp/)
-    "^rm\\s+/(?!tmp/)",
+    # rm -r/-rf/-ri/-rfi + absolute path (not /tmp/ or /var/tmp/)
+    "^rm\\s+(-[a-zA-Z]*r[a-zA-Z]*\\s+)+/(?!tmp/|var/tmp/)",
+    # rm -f/-fi + absolute path (not /tmp/ or /var/tmp/)
+    "^rm\\s+(-[a-zA-Z]*f[a-zA-Z]*\\s+)+/(?!tmp/|var/tmp/)",
+    # bare rm + absolute path (not /tmp/ or /var/tmp/)
+    "^rm\\s+/(?!tmp/|var/tmp/)",
 ]
 
 [ask.dangerous_pipelines]
@@ -393,6 +404,7 @@ patterns = [
     "xargs.*chmod",
     "xargs.*chown",
     "find.*-exec.*rm",
+    "find.*-exec.*mv",
     "find.*-exec.*chmod",
     "find.*-delete",
 ]
@@ -446,6 +458,32 @@ description = "Commands executed with different group permissions"
 patterns = [
     "^sg ",
     "^newgrp ",
+]
+
+[ask.package_manager_install]
+description = "Package installation from remote registries (supply chain risk)"
+# npm install bare (no package name) is intentionally excluded: it installs from
+# local package.json and is a routine dev operation. Only registry installs prompt.
+# Local-path installs (npm install ./pkg) and flag-only forms (npm install --save-dev)
+# are also excluded via negative lookaheads.
+patterns = [
+    "^apt(-get)? install",
+    "^apt(-get)? upgrade",
+    "^pip install",
+    "^npm install (?!\\.)(?!--)(.+)",
+    "^yarn add",
+    "^brew install",
+    "^pacman -S ",
+    "^cargo install ",
+    "^gem install",
+]
+
+[ask.kernel_modules]
+description = "Kernel module load/unload operations"
+patterns = [
+    "^insmod ",
+    "^modprobe ",
+    "^rmmod ",
 ]
 
 # =============================================================================
@@ -550,8 +588,10 @@ patterns = [
     "^bat",
     "^watch ",
     "^man ",
-    "--version$",
-    "--help$",
+    # Match --version/--help at end of command OR before a space/pipe suffix
+    # (e.g. 'bash --version | head -1' needs \s variant, not just $)
+    "--version(\\s|$)",
+    "--help(\\s|$)",
 ]
 
 [allow.c_cpp_toolchain]
@@ -744,6 +784,30 @@ patterns = [
     "^prime-select query",
 ]
 
+[allow.system_user_info]
+description = "User session and power profile queries (read-only)"
+# Common informational commands that appear in diagnostic sessions
+# but have no side effects and are not covered by existing allow lists.
+patterns = [
+    "^who\\b",
+    "^last\\b",
+    "^powerprofilesctl",
+]
+
+[allow.generic_read_subcommands]
+description = "Any tool using universally read-only subcommand verbs"
+# Covers unknown/new CLI tools that follow '<tool> <verb>' conventions.
+# 'show', 'get', 'inspect', 'export', 'dump' are intentionally excluded:
+# they expose secrets in specific tools (e.g. git show, kubectl get secret -o yaml).
+# These are legitimate dev operations but feel wrong to auto-approve silently.
+patterns = [
+    "^[a-z][a-z0-9_-]+ (list|ls)( |$)",
+    "^[a-z][a-z0-9_-]+ status( |$)",
+    "^[a-z][a-z0-9_-]+ describe( |$)",
+    "^[a-z][a-z0-9_-]+ query( |$)",
+    "^[a-z][a-z0-9_-]+ version( |$)",
+]
+
 [allow.command_wrappers]
 description = "Command execution wrappers"
 patterns = [
@@ -772,6 +836,25 @@ description = "Git and GitHub CLI"
 patterns = [
     "^git ",
     "^gh ",
+    # cd <dir> && git <op>: common pattern for running git in a specific directory.
+    # The validator's split logic already handles this (each segment is validated
+    # independently), so this entry matches the full compound before splitting
+    # as an explicit documentation and fallback.
+    # Positive list of safe verbs: excludes force-push, hard-reset, etc. so
+    # ask.git_destructive is not bypassed if this ever matches as a full compound.
+    "^cd .+ && git (add|status|diff|log|show|fetch|pull|checkout|switch|branch|commit|remote|tag|submodule|stash)( |$)",
+]
+
+[allow.github_lifecycle]
+description = "GitHub CLI lifecycle operations that are reversible or purely additive"
+# gh issue close/reopen: trivially reversible (reopen restores the issue)
+# gh issue comment / gh pr comment: additive only, never destroys data
+# Note: gh pr merge, gh pr close, gh repo delete remain in ask.github_mutations
+patterns = [
+    "^gh issue close",
+    "^gh issue reopen",
+    "^gh issue comment",
+    "^gh pr comment",
 ]
 
 [allow.github_labels]
@@ -1196,6 +1279,37 @@ patterns = [
     "^k3s kubectl exec .* -- mysql ",
 ]
 
+[allow.kubernetes_exec_shell_commands]
+description = "kubectl exec with bash -c wrappers and common read-only inner commands"
+# The bash -c wrapper is the standard Kubernetes pattern for setting env vars
+# (e.g. PGPASSWORD) before invoking a database client.
+# Safety: ask.kubectl_exec_db_mutations (evaluated before allow patterns) catches
+# destructive SQL (DROP, DELETE, INSERT, etc.) even through bash -c wrappers,
+# since its patterns use .* to match across the 'bash -c' prefix.
+# ask.dangerous_pipelines catches 'find.*-exec.*rm' and 'find.*-delete' patterns.
+# Only non-destructive operations reach these allow patterns.
+patterns = [
+    # bash -c wrapping psql with env var prefix (e.g. PGPASSWORD=$(kubectl get secret ...))
+    "kubectl exec .* -- bash -c '.*psql",
+    "kubectl exec .* -- bash -c \".*psql",
+    # HTTP health checks and API endpoint inspection inside pods.
+    # Tradeoff: curl with -o/--output can write to arbitrary paths inside the pod.
+    # This is accepted because: (a) blast radius is pod-local, (b) the primary use
+    # case is health checks (curl http://localhost:8080/healthz) which far outweigh
+    # the file-write risk. Future: consider asking if '-o ' or '--output ' is present.
+    "kubectl exec .* -- wget ",
+    "kubectl exec .* -- curl ",
+    # File search inside pods (find.*-exec.*rm, find.*-exec.*mv, find.*-delete
+    # are caught by ask.dangerous_pipelines which is evaluated before allow patterns)
+    "kubectl exec .* -- find ",
+    # k3s variants (same tradeoffs apply as kubectl above)
+    "k3s kubectl exec .* -- bash -c '.*psql",
+    "k3s kubectl exec .* -- bash -c \".*psql",
+    "k3s kubectl exec .* -- wget ",
+    "k3s kubectl exec .* -- curl ",
+    "k3s kubectl exec .* -- find ",
+]
+
 [allow.secrets]
 description = "Secrets decryption"
 patterns = [
@@ -1370,12 +1484,20 @@ patterns = [
     "^rm\\s+(-[a-zA-Z]+\\s+)*\\./",
 ]
 
+# allow.project_file_deletion was removed: project file deletion is now handled
+# dynamically at runtime via _inject_git_root_patterns() in validate-bash.py.
+# When Claude is invoked inside a git repo (cwd/.git exists), rm on any path
+# under that repo root is auto-approved and the .git directory is protected.
+
 [allow.temp_cleanup]
 description = "Temp file cleanup"
 patterns = [
     "^rm -rf /tmp/",
     "^rm -f /tmp/",
     "^rm /tmp/",
+    "^rm -rf /var/tmp/",
+    "^rm -f /var/tmp/",
+    "^rm /var/tmp/",
 ]
 
 [allow.clipboard_opener]
@@ -1393,12 +1515,15 @@ patterns = [
 ]
 
 [allow.file_truncate]
-description = "File truncation on relative paths (log files, build artifacts)"
+description = "File truncation on relative paths, /tmp, and /var/tmp"
 patterns = [
     # truncate with flags + relative path (not starting with /, ~, or $)
     "^truncate\\s+(-[a-zA-Z]+\\s+)*[^-/~$\\s]",
     # truncate with flags + explicit ./ prefix
     "^truncate\\s+(-[a-zA-Z]+\\s+)*\\./",
+    # truncate on /tmp/ and /var/tmp/ (log files, test fixtures)
+    "^truncate\\s+(-[a-zA-Z]+\\s+)*/tmp/",
+    "^truncate\\s+(-[a-zA-Z]+\\s+)*/var/tmp/",
 ]
 
 [allow.command_utilities]

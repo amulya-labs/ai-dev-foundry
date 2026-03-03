@@ -133,7 +133,24 @@ description = "gh api with jq"
 command = "gh pr comment 629 --repo owner/repo --body \"Review feedback summary\""
 description = "gh pr comment on a PR"
 
-# gh api POST to safe endpoints (comment replies, reactions)
+# gh issue close and comment: reversible/additive operations in allow.github_lifecycle
+[[allow]]
+command = "gh issue close 42 --comment \"Closing: resolved in #51\""
+description = "gh issue close with comment (reversible)"
+
+[[allow]]
+command = "gh issue close 123"
+description = "gh issue close (reversible; can be reopened)"
+
+[[allow]]
+command = "gh issue reopen 42"
+description = "gh issue reopen"
+
+[[allow]]
+command = "gh issue comment 99 --body \"See the linked PR for details.\""
+description = "gh issue comment (additive)"
+
+# gh api POST to safe endpoints (comment replies, reactions, issue/PR comments)
 [[allow]]
 command = "gh api -X POST repos/owner/repo/pulls/38/comments/2861609247/replies -f body=\"Looks good\""
 description = "gh api POST to comment reply (safe endpoint)"
@@ -142,7 +159,36 @@ description = "gh api POST to comment reply (safe endpoint)"
 command = "gh api repos/owner/repo/issues/comments/123/reactions -X POST -f content=\"+1\""
 description = "gh api POST to reaction (safe endpoint)"
 
-# gh api DELETE on /replies and /reactions must still prompt (deleting is destructive)
+[[allow]]
+command = "gh api repos/owner/repo/issues/123/comments -X POST -f body=\"Automated summary comment\""
+description = "gh api POST to issue comments (additive)"
+
+[[allow]]
+command = "gh api --method POST repos/owner/repo/issues/456/comments -f body=\"CI results\""
+description = "gh api --method POST to issue comments (additive)"
+
+[[allow]]
+command = "gh api repos/owner/repo/pulls/10/comments -X POST -f body=\"inline comment\" -f commit_id=abc123 -f path=src/main.py -f line=42"
+description = "gh api POST to pull request inline comment (additive)"
+
+# gh api POST to pulls/<N>/reviews must always prompt: APPROVE and REQUEST_CHANGES
+# directly affect merge eligibility and reviewer workflow. Even event=COMMENT
+# is a formal review submission that should be confirmed by the user.
+# Use 'gh pr review --comment' (covered by the ^gh allow rule) for comment-only reviews.
+[[ask]]
+command = "gh api repos/owner/repo/pulls/789/reviews -X POST -f event=COMMENT -f body=\"Review comment\""
+description = "gh api POST to pull request review with event=COMMENT must prompt"
+
+[[ask]]
+command = "gh api repos/owner/repo/pulls/789/reviews -X POST -f event=APPROVE"
+description = "gh api POST to pull request review with event=APPROVE must prompt"
+
+[[ask]]
+command = "gh api repos/owner/repo/pulls/789/reviews -X POST -f event=REQUEST_CHANGES -f body=\"Needs work\""
+description = "gh api POST to pull request review with event=REQUEST_CHANGES must prompt"
+
+# gh api DELETE on safe endpoints must still prompt (deleting is destructive)
+# gh api POST to new resource creation (not a comment on an existing entity) must still prompt
 [[ask]]
 command = "gh api repos/owner/repo/issues/comments/123/reactions/456 -X DELETE"
 description = "gh api DELETE on reaction endpoint must still prompt"
@@ -150,6 +196,14 @@ description = "gh api DELETE on reaction endpoint must still prompt"
 [[ask]]
 command = "gh api repos/owner/repo/pulls/1/comments/2/replies/789 -X DELETE"
 description = "gh api DELETE on replies endpoint must still prompt"
+
+[[ask]]
+command = "gh api repos/owner/repo/issues -X POST -f title=\"New issue\" -f body=\"...\""
+description = "gh api POST to create new issue (not a comment) must still prompt"
+
+[[ask]]
+command = "gh api repos/owner/repo/pulls -X POST -f title=\"New PR\" -f head=branch -f base=main"
+description = "gh api POST to create new pull request must still prompt"
 
 [[allow]]
 command = "getent passwd root"
@@ -466,6 +520,32 @@ description = "k3s kubectl exec mysql"
 command = "kubectl exec -n trading postgres-postgresql-0 -- env PGPASSWORD=\"$PGPASSWORD\" psql -U postgres -d market_data -c \"SELECT unnest(enum_range(NULL::archivepartitionstatus)) AS value;\""
 description = "kubectl exec psql with env PGPASSWORD var and SELECT"
 
+# kubectl exec bash -c wrapper: standard pattern when PGPASSWORD must be set via command substitution
+[[allow]]
+command = "kubectl exec -n trading postgres-0 -- bash -c 'PGPASSWORD=$(kubectl get secret pgpass -o jsonpath={.data.password} | base64 -d) psql -U postgres -d mydb -c \"SELECT count(*) FROM orders;\"'"
+description = "kubectl exec bash -c with PGPASSWORD from secret substitution (safe SELECT)"
+
+[[allow]]
+command = "kubectl exec postgres-0 -- bash -c 'PGPASSWORD=mypassword psql -U postgres -d appdb -c \"\\dt\"'"
+description = "kubectl exec bash -c psql with literal PGPASSWORD"
+
+[[allow]]
+command = "k3s kubectl exec postgres-0 -- bash -c 'PGPASSWORD=secret psql -U postgres -d db -c \"SELECT 1\"'"
+description = "k3s kubectl exec bash -c psql"
+
+# kubectl exec with wget/curl for HTTP health checks and API endpoint inspection
+[[allow]]
+command = "kubectl exec -n monitoring prometheus-0 -- wget -qO- http://localhost:9090/metrics"
+description = "kubectl exec wget for metrics endpoint"
+
+[[allow]]
+command = "kubectl exec -n app api-pod-xyz -- curl -s http://localhost:8080/health"
+description = "kubectl exec curl for health check"
+
+[[allow]]
+command = "kubectl exec app-pod -- find /etc -name '*.conf'"
+description = "kubectl exec find for config file inspection"
+
 # Local data processing piped to interpreters (non-download sources are allowed)
 [[allow]]
 command = "cat file.json | python3 -c \"import json, sys; print(json.load(sys.stdin))\""
@@ -694,6 +774,31 @@ description = "bash -c unwrap: safe git command"
 [[allow]]
 command = "sh -c \"ls -la\""
 description = "sh -c unwrap: safe ls command"
+
+# User session and power profile queries (system_user_info)
+[[allow]]
+command = "who -b"
+description = "who -b (last system boot time)"
+
+[[allow]]
+command = "who -a"
+description = "who -a (all user sessions)"
+
+[[allow]]
+command = "last reboot | head -5"
+description = "last reboot piped to head (boot history)"
+
+[[allow]]
+command = "last -n 10"
+description = "last with count limit"
+
+[[allow]]
+command = "powerprofilesctl list"
+description = "powerprofilesctl list (read-only power profiles)"
+
+[[allow]]
+command = "powerprofilesctl get"
+description = "powerprofilesctl get (current power profile)"
 
 # Desktop/display environment info (system_inspection)
 [[allow]]
@@ -979,6 +1084,15 @@ description = "chain: absolute path exec + echo via &&"
 [[allow]]
 command = "/usr/bin/env python3 --version && echo 'python ready'"
 description = "chain: /usr/bin/env python + echo via &&"
+
+# --version mid-command (followed by pipe): allow.help_and_info uses \s variant
+[[allow]]
+command = "bash --version | head -1"
+description = "--version before pipe to head (mid-command)"
+
+[[allow]]
+command = "python3 --version 2>&1 | head -1"
+description = "--version before pipe with redirect"
 
 # Subshells in chains
 [[allow]]
@@ -1323,7 +1437,15 @@ description = "kubectl exec sed -i (not in allow list)"
 
 [[ask]]
 command = "kubectl exec pod -- find /app -exec rm {} \\;"
-description = "kubectl exec find with -exec (not in allow list)"
+description = "kubectl exec find with -exec rm (caught by ask.dangerous_pipelines)"
+
+[[ask]]
+command = "kubectl exec pod -- find /var -exec mv {} /tmp/ \\;"
+description = "kubectl exec find with -exec mv (caught by ask.dangerous_pipelines)"
+
+[[ask]]
+command = "find /var -exec mv {} /tmp/ \\;"
+description = "find -exec mv (caught by ask.dangerous_pipelines)"
 
 # Security: whitespace bypass test
 [[ask]]
@@ -1692,14 +1814,14 @@ description = "crontab edit (still asks)"
 command = "crontab -r"
 description = "crontab remove (still asks)"
 
-# Regression: absolute non-tmp paths must still trigger ask
+# Regression: shallow home paths and system paths still ask
 [[ask]]
 command = "rm -rf /home/user"
-description = "rm -rf absolute non-tmp path requires confirmation"
+description = "rm -rf shallow home dir (no project component) still asks"
 
 [[ask]]
 command = "rm -f /etc/config"
-description = "rm -f absolute non-tmp path requires confirmation"
+description = "rm -f absolute system path requires confirmation"
 
 [[ask]]
 command = "rm /etc/hosts"
@@ -2100,3 +2222,248 @@ description = "builtin exec: ask guard not bypassed by builtin prefix"
 [[allow]]
 command = "echo $(echo 'test\\'s done')"
 description = "backslash in single-quoted arg inside $(): not an escape, paren closes correctly"
+
+# =============================================================================
+# ask.package_manager_install — remote registry installs prompt for confirmation
+# =============================================================================
+
+[[ask]]
+command = "apt install vim"
+description = "apt install prompts (supply chain risk)"
+
+[[ask]]
+command = "apt-get install nginx"
+description = "apt-get install prompts"
+
+[[ask]]
+command = "apt upgrade"
+description = "apt upgrade prompts (unreviewed package changes)"
+
+[[ask]]
+command = "apt-get upgrade"
+description = "apt-get upgrade prompts"
+
+[[ask]]
+command = "pip install requests"
+description = "pip install from registry prompts"
+
+[[ask]]
+command = "pip install -r requirements.txt"
+description = "pip install from requirements file prompts"
+
+[[ask]]
+command = "npm install express"
+description = "npm install registry package prompts"
+
+[[ask]]
+command = "npm install -g typescript"
+description = "npm install -g global package prompts"
+
+# npm install bare (no package name) installs from package.json: still allowed
+[[allow]]
+command = "npm install"
+description = "npm install bare (from package.json) is allowed"
+
+# npm install with local path is still allowed
+[[allow]]
+command = "npm install ./local-package"
+description = "npm install local path is allowed"
+
+[[ask]]
+command = "yarn add lodash"
+description = "yarn add registry package prompts"
+
+[[ask]]
+command = "brew install jq"
+description = "brew install prompts"
+
+[[ask]]
+command = "pacman -S vim"
+description = "pacman -S install prompts"
+
+[[ask]]
+command = "cargo install ripgrep"
+description = "cargo install from registry prompts"
+
+[[ask]]
+command = "gem install rails"
+description = "gem install from registry prompts"
+
+# =============================================================================
+# ask.kernel_modules — kernel module load/unload prompts
+# =============================================================================
+
+[[ask]]
+command = "insmod mymodule.ko"
+description = "insmod loads kernel module (prompts)"
+
+[[ask]]
+command = "modprobe nf_conntrack"
+description = "modprobe loads kernel module (prompts)"
+
+[[ask]]
+command = "rmmod mymodule"
+description = "rmmod unloads kernel module (prompts)"
+
+# =============================================================================
+# deny.privilege_escalation — absolute path bypass now denied
+# =============================================================================
+
+[[deny]]
+command = "/usr/bin/sudo bash"
+description = "sudo via absolute path is denied (bypass attempt)"
+
+[[deny]]
+command = "/usr/bin/sudo rm -rf /etc"
+description = "sudo with dangerous command via absolute path is denied"
+
+[[deny]]
+command = "/bin/su - root"
+description = "su via absolute path is denied (bypass attempt)"
+
+# =============================================================================
+# allow.generic_read_subcommands — read-only verb patterns for unknown tools
+# =============================================================================
+
+# Tools already in specific allow lists: verify the generic pattern is consistent
+[[allow]]
+command = "powerprofilesctl list"
+description = "powerprofilesctl list (read-only list verb)"
+
+[[allow]]
+command = "kind list clusters"
+description = "kind list (read-only list verb)"
+
+[[allow]]
+command = "fnm list"
+description = "fnm list (bare list verb, end of string)"
+
+# Tools with hyphen/underscore in name
+[[allow]]
+command = "some-tool list"
+description = "generic: hyphenated tool name with list verb"
+
+[[allow]]
+command = "some-tool status"
+description = "generic: hyphenated tool name with status verb"
+
+[[allow]]
+command = "my_tool describe"
+description = "generic: underscored tool name with describe verb"
+
+# Subcommand with trailing arguments
+[[allow]]
+command = "sometool list --all"
+description = "generic: list verb with trailing flags"
+
+[[allow]]
+command = "sometool status myresource"
+description = "generic: status verb with resource argument"
+
+[[allow]]
+command = "sometool version"
+description = "generic: bare version subcommand (end of string)"
+
+[[allow]]
+command = "sometool query --filter=active"
+description = "generic: query verb with flag"
+
+# Excluded verbs: show, get, inspect should NOT be auto-approved generically
+# (they can expose secrets in tools like git, kubectl, helm)
+# git show falls through to allow via ^git  pattern, but for unknown tools:
+[[ask]]
+command = "unknowntool get secret"
+description = "generic 'get' verb is excluded (may expose secrets)"
+
+[[ask]]
+command = "unknowntool show credentials"
+description = "generic 'show' verb is excluded (may expose secrets)"
+
+# =============================================================================
+# allow.git — cd <dir> && git <op> compound (running git in a specific directory)
+# =============================================================================
+
+[[allow]]
+command = "cd /home/user/project && git add ."
+description = "cd + git add compound"
+
+[[allow]]
+command = "cd /tmp/repo && git status"
+description = "cd + git status compound"
+
+[[allow]]
+command = "cd /tmp/repo && git commit -m 'fix'"
+description = "cd + git commit compound"
+
+[[allow]]
+command = "cd /tmp/repo && git fetch origin"
+description = "cd + git fetch compound"
+
+[[allow]]
+command = "cd /tmp/repo && git log --oneline -5"
+description = "cd + git log compound"
+
+# Dangerous git operations still ask even in cd compound (split logic catches them)
+[[ask]]
+command = "cd /tmp/repo && git push --force"
+description = "cd + git force push still asks"
+
+[[ask]]
+command = "cd /tmp/repo && git reset --hard HEAD~1"
+description = "cd + git reset --hard still asks"
+
+# =============================================================================
+# git-root dynamic pattern injection — see TestGitRootPatternInjection in
+# tests/test_validate_bash.py for the unit/integration tests that cover allow
+# behavior within a git repo (injected at runtime, not in the static TOML).
+# =============================================================================
+
+# Without git-root injection, all absolute home/system paths ask
+[[ask]]
+command = "rm -rf /home/user"
+description = "rm -rf /home/user (no git-root injection) asks"
+
+[[ask]]
+command = "rm /home/user/important.conf"
+description = "rm /home/user/<file> (no git-root injection) asks"
+
+# System paths still ask (even with injection, non-repo paths are unaffected)
+[[ask]]
+command = "rm /usr/local/lib/file.so"
+description = "rm absolute system path still asks"
+
+[[ask]]
+command = "rm -rf /var/log/myapp"
+description = "rm /var/log (non-tmp var) still asks"
+
+# =============================================================================
+# allow.temp_cleanup — /var/tmp/ coverage
+# =============================================================================
+
+[[allow]]
+command = "rm -rf /var/tmp/build-cache"
+description = "rm -rf /var/tmp/ dir is allowed"
+
+[[allow]]
+command = "rm -f /var/tmp/tempfile.lock"
+description = "rm -f /var/tmp/ file is allowed"
+
+[[allow]]
+command = "rm /var/tmp/scratch"
+description = "bare rm /var/tmp/ file is allowed"
+
+# =============================================================================
+# allow.file_truncate — /tmp/ and /var/tmp/ absolute paths
+# =============================================================================
+
+[[allow]]
+command = "truncate -s 0 /tmp/app.log"
+description = "truncate /tmp/ file is allowed"
+
+[[allow]]
+command = "truncate -s 0 /var/tmp/cache.db"
+description = "truncate /var/tmp/ file is allowed"
+
+[[allow]]
+command = "truncate /tmp/output.txt"
+description = "truncate /tmp/ file (no size flag) is allowed"
