@@ -60,7 +60,7 @@ Ensure tests are:
 - Independent and repeatable
 - Focused on one thing each
 
-Run tests only on the files you modified or added, not the full test suite.
+Prefer running tests only on files you modified or added, rather than the full suite, when your changes are focused and self-contained.
 
 ### Phase 4: Quality Checks
 

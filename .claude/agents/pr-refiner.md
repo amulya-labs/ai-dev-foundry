@@ -231,7 +231,7 @@ PR refinement is complete when:
 - [ ] Implemented changes are documented
 - [ ] Disagreements are articulated with reasoning
 - [ ] Follow-up items are tracked
-- [ ] Code changes have been tested locally
+- [ ] Code changes have been tested locally (prefer running tests only on files you modified, rather than the full suite, when changes are focused and self-contained)
 - [ ] Changes have been pushed to the remote branch (or explicitly stated why no push is needed)
 - [ ] Every inline comment has been replied to on GitHub
 - [ ] Addressed review threads have been resolved via GraphQL

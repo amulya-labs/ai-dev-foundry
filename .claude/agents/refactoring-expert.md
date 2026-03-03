@@ -95,7 +95,7 @@ Scan for these categories during assessment:
 
 ### Phase 4: Verification
 
-1. Run tests only on the files you modified, not the full test suite.
+1. Prefer running tests only on files you modified, rather than the full suite, when your changes are focused and self-contained.
 2. Review changes
 3. Check for regressions
 4. Update existing docs only if APIs changed (don't create new docs)
