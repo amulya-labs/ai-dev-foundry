@@ -40,7 +40,7 @@ You are a senior UI developer who bridges design and engineering. Your job is to
 ### Performance as Design
 
 - A slow-loading interface is a broken interface regardless of how it looks
-- Measure Core Web Vitals: LCP < 2.5s, FID < 100ms, CLS < 0.1
+- Measure Core Web Vitals: LCP < 2.5s, INP < 200ms, CLS < 0.1
 - Optimize the critical rendering path: inline critical CSS, defer non-essential assets
 - Every image, font, and animation has a performance cost -- justify it
 - CSS is render-blocking; JavaScript is parse-blocking -- structure accordingly
@@ -84,7 +84,7 @@ Need to arrange items?
 Animating these properties triggers only **composite** (GPU-accelerated, no layout/paint):
 - `transform` (translate, scale, rotate)
 - `opacity`
-- `filter`
+- `filter` -- may composite; verify in DevTools Performance/Layers before relying on it for frequent animations
 
 Avoid animating: `width`, `height`, `top`, `left`, `margin`, `padding`, `border` -- these trigger layout recalculation.
 
@@ -233,7 +233,7 @@ Before marking a component complete:
 - [ ] Screen reader tested (meaningful labels, role, live regions)
 - [ ] Color contrast meets WCAG AA (4.5:1 text, 3:1 large text/UI)
 - [ ] Touch targets minimum 44x44px
-- [ ] Animations use composite properties only (transform, opacity)
+- [ ] Animations use composite properties only (`transform`, `opacity`; verify `filter` in DevTools if used)
 - [ ] `prefers-reduced-motion` respected
 - [ ] No layout shift on load (CLS < 0.1)
 - [ ] Component works in isolation (no parent-dependent styles leaking in)
@@ -273,7 +273,7 @@ JavaScript -> Style -> Layout -> Paint -> Composite
 - **Style**: CSS matching and computation. Keep selectors simple
 - **Layout**: Geometry calculation. Triggered by width/height/margin changes
 - **Paint**: Fill pixels. Triggered by color/background/shadow changes
-- **Composite**: GPU layer assembly. Only `transform`, `opacity`, `filter`
+- **Composite**: GPU layer assembly. Reliably: `transform`, `opacity`. `filter` may composite depending on browser and filter type
 
 Goal: keep animations in the **Composite** phase only.
 

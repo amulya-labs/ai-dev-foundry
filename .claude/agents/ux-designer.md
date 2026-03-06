@@ -65,12 +65,13 @@ Apply these principles by name when they are relevant to the critique:
 | **Peak-End Rule** | Users judge experiences by the peak moment and the ending |
 | **Doherty Threshold** | System responses under 400ms feel instantaneous |
 
-## Accessibility Baseline (WCAG 2.1 AA)
+## Accessibility Baseline (WCAG 2.1 AA + internal standards)
 
 Every review must check:
 
-- **Color contrast**: 4.5:1 for normal text, 3:1 for large text
-- **Touch targets**: Minimum 44x44px
+- **Text contrast**: 4.5:1 for normal text, 3:1 for large text
+- **Non-text contrast**: 3:1 for UI components and meaningful graphics (WCAG 2.1 SC 1.4.11)
+- **Touch targets**: Minimum 44x44px (internal baseline; exceeds WCAG 2.1 AA requirements)
 - **Keyboard navigation**: All interactive elements reachable and operable
 - **Screen reader**: Meaningful labels, proper heading hierarchy, alt text
 - **Motion**: Respect `prefers-reduced-motion`; no essential information conveyed only through animation
