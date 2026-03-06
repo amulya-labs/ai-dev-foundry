@@ -151,6 +151,8 @@ jobs:
             cat /tmp/gemini-resp.json
           }
 
+          FLASH_MODEL="gemini-2.5-flash"
+
           # Fetch PR metadata
           gh pr view "$PR_NUMBER" \
             --repo "$REPO" \
@@ -211,7 +213,7 @@ jobs:
           }' > /tmp/gemini-flash-payload.json
 
           FLASH_RESPONSE=$(gemini_api_call \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}" \
+            "https://generativelanguage.googleapis.com/v1beta/models/${FLASH_MODEL}:generateContent?key=${GEMINI_API_KEY}" \
             "/tmp/gemini-flash-payload.json")
 
           SUMMARY_TEXT=$(echo "$FLASH_RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null)
@@ -490,6 +492,8 @@ jobs:
             cat /tmp/gemini-resp.json
           }
 
+          FLASH_MODEL="gemini-2.5-flash"
+
           # Fetch PR metadata (no local checkout — use gh with --repo for all access)
           gh pr view "$PR_NUMBER" \
             --repo "$REPO" \
@@ -557,7 +561,7 @@ jobs:
           }' > /tmp/gemini-flash-payload.json
 
           FLASH_RESPONSE=$(gemini_api_call \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}" \
+            "https://generativelanguage.googleapis.com/v1beta/models/${FLASH_MODEL}:generateContent?key=${GEMINI_API_KEY}" \
             "/tmp/gemini-flash-payload.json")
 
           SUMMARY_TEXT=$(echo "$FLASH_RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null)
