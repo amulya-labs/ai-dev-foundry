@@ -83,7 +83,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          STATS=$(gh pr view "${{ steps.pr.outputs.number }}" \
+          STATS=$(gh pr view "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
             --json additions,deletions,changedFiles)
           FILES=$(echo "$STATS" | jq '.changedFiles')
@@ -356,7 +356,7 @@ jobs:
           retention-days: 7
 
       - name: Post failure notice
-        if: always() && steps.pr.outputs.number != ''
+        if: always() && github.event.issue.number != ''
         env:
           GH_TOKEN: ${{ github.token }}
           REVIEW_OUTCOME: ${{ steps.gemini-review.outcome }}
