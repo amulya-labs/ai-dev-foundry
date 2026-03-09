@@ -355,10 +355,10 @@ else
         "Expected EXTRA_FILES handling in script"
 fi
 
-if [[ -f "$REPO_ROOT/.github/repomixignore" ]]; then
-    assert ".github/repomixignore exists" "pass"
+if [[ -f "$REPO_ROOT/.repomixignore" ]]; then
+    assert ".repomixignore exists" "pass"
 else
-    assert ".github/repomixignore exists" "fail" "File not found"
+    assert ".repomixignore exists" "fail" "File not found"
 fi
 
 if [[ -f "$REPO_ROOT/examples/notebooklm-sources.yaml" ]]; then
