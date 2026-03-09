@@ -238,7 +238,7 @@ jobs:
 
           echo ""
           echo "=== Checking workflow files ==="
-          for wf in .github/workflows/ci.yml .github/workflows/claude.yml .github/workflows/claude-code-review.yml .github/workflows/gemini-code-review.yml; do
+          for wf in .github/workflows/ci.yml .github/workflows/claude.yml .github/workflows/claude-code-review.yml .github/workflows/gemini-code-review.yml .github/workflows/sync-notebooklm.yml; do
             if [ -f "$wf" ]; then
               echo -n "Checking $wf... "
               if ! grep -q "Source:.*github.com/amulya-labs/ai-dev-foundry" "$wf"; then

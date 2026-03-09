@@ -45,7 +45,7 @@ assert() {
 
 echo "=== Workflow file locations ==="
 
-EXPECTED_WORKFLOWS=(claude.yml claude-code-review.yml gemini-code-review.yml)
+EXPECTED_WORKFLOWS=(claude.yml claude-code-review.yml gemini-code-review.yml sync-notebooklm.yml)
 
 for f in "${EXPECTED_WORKFLOWS[@]}"; do
     if [[ -f "$REPO_ROOT/.github/workflows/$f" ]]; then
@@ -122,11 +122,11 @@ else
         "Expected PROVIDER_CLAUDE_WORKFLOWS= in script"
 fi
 
-if grep -q 'PROVIDER_CLAUDE_SECRET=' "$MANAGE_SCRIPT"; then
-    assert "PROVIDER_CLAUDE_SECRET is defined" "pass"
+if grep -q 'PROVIDER_CLAUDE_SECRETS=' "$MANAGE_SCRIPT"; then
+    assert "PROVIDER_CLAUDE_SECRETS is defined" "pass"
 else
-    assert "PROVIDER_CLAUDE_SECRET is defined" "fail" \
-        "Expected PROVIDER_CLAUDE_SECRET= in script"
+    assert "PROVIDER_CLAUDE_SECRETS is defined" "fail" \
+        "Expected PROVIDER_CLAUDE_SECRETS= in script"
 fi
 
 if grep -q 'PROVIDER_CLAUDE_LABEL=' "$MANAGE_SCRIPT"; then
@@ -143,11 +143,11 @@ else
         "Expected PROVIDER_GEMINI_WORKFLOWS= in script"
 fi
 
-if grep -q 'PROVIDER_GEMINI_SECRET=' "$MANAGE_SCRIPT"; then
-    assert "PROVIDER_GEMINI_SECRET is defined" "pass"
+if grep -q 'PROVIDER_GEMINI_SECRETS=' "$MANAGE_SCRIPT"; then
+    assert "PROVIDER_GEMINI_SECRETS is defined" "pass"
 else
-    assert "PROVIDER_GEMINI_SECRET is defined" "fail" \
-        "Expected PROVIDER_GEMINI_SECRET= in script"
+    assert "PROVIDER_GEMINI_SECRETS is defined" "fail" \
+        "Expected PROVIDER_GEMINI_SECRETS= in script"
 fi
 
 if grep -q 'PROVIDER_GEMINI_LABEL=' "$MANAGE_SCRIPT"; then
@@ -272,6 +272,99 @@ if grep -q 'gemini_review.py' "$MANAGE_SCRIPT"; then
 else
     assert "Script references gemini_review.py" "fail" \
         "Expected gemini_review.py download in manage-ai-configs.sh"
+fi
+
+echo
+
+# ── NotebookLM provider checks ────────────────────────────────────────
+
+echo "=== NotebookLM provider support ==="
+
+if grep -q 'PROVIDER_NOTEBOOKLM_WORKFLOWS=' "$MANAGE_SCRIPT"; then
+    assert "PROVIDER_NOTEBOOKLM_WORKFLOWS is defined" "pass"
+else
+    assert "PROVIDER_NOTEBOOKLM_WORKFLOWS is defined" "fail" \
+        "Expected PROVIDER_NOTEBOOKLM_WORKFLOWS= in script"
+fi
+
+if grep -q 'PROVIDER_NOTEBOOKLM_SECRETS=' "$MANAGE_SCRIPT"; then
+    assert "PROVIDER_NOTEBOOKLM_SECRETS is defined" "pass"
+else
+    assert "PROVIDER_NOTEBOOKLM_SECRETS is defined" "fail" \
+        "Expected PROVIDER_NOTEBOOKLM_SECRETS= in script"
+fi
+
+if grep -q 'PROVIDER_NOTEBOOKLM_LABEL=' "$MANAGE_SCRIPT"; then
+    assert "PROVIDER_NOTEBOOKLM_LABEL is defined" "pass"
+else
+    assert "PROVIDER_NOTEBOOKLM_LABEL is defined" "fail" \
+        "Expected PROVIDER_NOTEBOOKLM_LABEL= in script"
+fi
+
+if grep -q 'sync-notebooklm.yml' "$MANAGE_SCRIPT"; then
+    assert "Script references sync-notebooklm.yml" "pass"
+else
+    assert "Script references sync-notebooklm.yml" "fail" \
+        "Expected sync-notebooklm.yml in script"
+fi
+
+if grep -q 'NLM_COOKIES_JSON' "$MANAGE_SCRIPT"; then
+    assert "Script mentions NLM_COOKIES_JSON secret" "pass"
+else
+    assert "Script mentions NLM_COOKIES_JSON secret" "fail" \
+        "Expected NLM_COOKIES_JSON in script"
+fi
+
+if grep -q 'NLM_NOTEBOOK_ID' "$MANAGE_SCRIPT"; then
+    assert "Script mentions NLM_NOTEBOOK_ID secret" "pass"
+else
+    assert "Script mentions NLM_NOTEBOOK_ID secret" "fail" \
+        "Expected NLM_NOTEBOOK_ID in script"
+fi
+
+if grep -q 'PROVIDER_NOTEBOOKLM_EXTRA_FILES=' "$MANAGE_SCRIPT"; then
+    assert "PROVIDER_NOTEBOOKLM_EXTRA_FILES is defined" "pass"
+else
+    assert "PROVIDER_NOTEBOOKLM_EXTRA_FILES is defined" "fail" \
+        "Expected PROVIDER_NOTEBOOKLM_EXTRA_FILES= in script (repomixignore)"
+fi
+
+if grep -q 'usage_notebooklm()' "$MANAGE_SCRIPT"; then
+    assert "usage_notebooklm() function exists" "pass"
+else
+    assert "usage_notebooklm() function exists" "fail"
+fi
+
+if grep -q "notebooklm)" "$MANAGE_SCRIPT"; then
+    assert "Agent 'notebooklm' is handled in main case" "pass"
+else
+    assert "Agent 'notebooklm' is handled in main case" "fail" \
+        "Expected notebooklm) case branch in main case statement"
+fi
+
+echo
+
+# ── Extra files download support ─────────────────────────────────────
+
+echo "=== Extra files download support ==="
+
+if grep -q 'EXTRA_FILES' "$MANAGE_SCRIPT"; then
+    assert "EXTRA_FILES support exists in download_provider_workflows()" "pass"
+else
+    assert "EXTRA_FILES support exists in download_provider_workflows()" "fail" \
+        "Expected EXTRA_FILES handling in script"
+fi
+
+if [[ -f "$REPO_ROOT/.github/repomixignore" ]]; then
+    assert ".github/repomixignore exists" "pass"
+else
+    assert ".github/repomixignore exists" "fail" "File not found"
+fi
+
+if [[ -f "$REPO_ROOT/examples/notebooklm-sources.yaml" ]]; then
+    assert "examples/notebooklm-sources.yaml exists" "pass"
+else
+    assert "examples/notebooklm-sources.yaml exists" "fail" "File not found"
 fi
 
 echo

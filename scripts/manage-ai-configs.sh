@@ -31,7 +31,7 @@ WITH_GHA_WORKFLOWS=false
 # shellcheck disable=SC2034
 PROVIDER_CLAUDE_WORKFLOWS="claude.yml claude-code-review.yml"
 # shellcheck disable=SC2034
-PROVIDER_CLAUDE_SECRET="CLAUDE_CODE_OAUTH_TOKEN"
+PROVIDER_CLAUDE_SECRETS="CLAUDE_CODE_OAUTH_TOKEN"
 # shellcheck disable=SC2034
 PROVIDER_CLAUDE_LABEL="Claude"
 # Optional local config dir — omit if provider has no local config
@@ -45,13 +45,24 @@ PROVIDER_CLAUDE_CONFIG_ITEMS="agents hooks settings.json"
 # shellcheck disable=SC2034
 PROVIDER_GEMINI_WORKFLOWS="gemini-code-review.yml"
 # shellcheck disable=SC2034
-PROVIDER_GEMINI_SECRET="GEMINI_API_KEY"
+PROVIDER_GEMINI_SECRETS="GEMINI_API_KEY"
 # shellcheck disable=SC2034
 PROVIDER_GEMINI_LABEL="Gemini"
 # Space-separated list of scripts under .github/workflows/scripts/ to download
 # shellcheck disable=SC2034
 PROVIDER_GEMINI_WORKFLOW_SCRIPTS="gemini_review.py"
 # Gemini has no local config dir yet — leave unset
+
+# shellcheck disable=SC2034
+PROVIDER_NOTEBOOKLM_WORKFLOWS="sync-notebooklm.yml"
+# shellcheck disable=SC2034
+PROVIDER_NOTEBOOKLM_SECRETS="NLM_COOKIES_JSON NLM_NOTEBOOK_ID"
+# shellcheck disable=SC2034
+PROVIDER_NOTEBOOKLM_LABEL="NotebookLM"
+# Extra files to install alongside workflows (relative to repo root)
+# shellcheck disable=SC2034
+PROVIDER_NOTEBOOKLM_EXTRA_FILES=".github/repomixignore"
+# NotebookLM has no local config dir — workflow-only
 
 # Populated by flag parsing; positional agent arg also adds entries here
 PROVIDERS_ENABLED=()
@@ -148,7 +159,7 @@ download_provider_workflows() {
     local upper
     upper=$(printf '%s' "$provider" | tr '[:lower:]' '[:upper:]')
     local workflows_var="PROVIDER_${upper}_WORKFLOWS"
-    local secret_var="PROVIDER_${upper}_SECRET"
+    local secrets_var="PROVIDER_${upper}_SECRETS"
     local label_var="PROVIDER_${upper}_LABEL"
 
     if [[ ! -v "$workflows_var" ]]; then
@@ -157,7 +168,7 @@ download_provider_workflows() {
     fi
 
     local label="${!label_var}"
-    local secret="${!secret_var}"
+    local secrets="${!secrets_var}"
     local workflows="${!workflows_var}"
     local -a wf_list
     read -ra wf_list <<< "$workflows"
@@ -192,7 +203,30 @@ download_provider_workflows() {
         done
     fi
 
-    warn "Requires ${secret} secret in your repo settings"
+    # Download extra files if defined for this provider
+    local extra_var="PROVIDER_${upper}_EXTRA_FILES"
+    if [[ -v "$extra_var" ]] && [[ -n "${!extra_var}" ]]; then
+        local -a extra_list
+        read -ra extra_list <<< "${!extra_var}"
+        info "Fetching ${label} extra files..."
+        for extra in "${extra_list[@]}"; do
+            local dest_dir
+            dest_dir=$(dirname "$extra")
+            mkdir -p "$dest_dir"
+            local url="$RAW_BASE/$extra"
+            if curl -fsSL "$url" -o "$extra" 2>/dev/null; then
+                info "  Downloaded $extra"
+            else
+                warn "  Failed to download $extra"
+            fi
+        done
+    fi
+
+    local -a secrets_list
+    read -ra secrets_list <<< "$secrets"
+    for secret in "${secrets_list[@]}"; do
+        warn "Requires ${secret} secret in your repo settings"
+    done
 }
 
 # Provider-specific post-download hook for Claude
@@ -299,9 +333,13 @@ install_config() {
     for _p in "${PROVIDERS_ENABLED[@]}"; do
         _up=$(printf '%s' "$_p" | tr '[:lower:]' '[:upper:]')
         local label_var="PROVIDER_${_up}_LABEL"
-        local secret_var="PROVIDER_${_up}_SECRET"
+        local secrets_var="PROVIDER_${_up}_SECRETS"
         info "${!label_var} workflows installed in .github/workflows/"
-        warn "  → Requires ${!secret_var} secret in your repo settings"
+        local -a _secrets_list
+        read -ra _secrets_list <<< "${!secrets_var}"
+        for _s in "${_secrets_list[@]}"; do
+            warn "  → Requires ${_s} secret in your repo settings"
+        done
     done
     if $WITH_GHA_WORKFLOWS; then
         info "Extra workflow templates installed to .github/workflows/"
@@ -346,9 +384,13 @@ update_config() {
     for _p in "${PROVIDERS_ENABLED[@]}"; do
         _up=$(printf '%s' "$_p" | tr '[:lower:]' '[:upper:]')
         local label_var="PROVIDER_${_up}_LABEL"
-        local secret_var="PROVIDER_${_up}_SECRET"
+        local secrets_var="PROVIDER_${_up}_SECRETS"
         info "${!label_var} workflows updated in .github/workflows/"
-        warn "  → Requires ${!secret_var} secret in your repo settings"
+        local -a _secrets_list
+        read -ra _secrets_list <<< "${!secrets_var}"
+        for _s in "${_secrets_list[@]}"; do
+            warn "  → Requires ${_s} secret in your repo settings"
+        done
     done
     if $WITH_GHA_WORKFLOWS; then
         info "Extra workflow templates updated in .github/workflows/"
@@ -370,7 +412,7 @@ usage_claude() {
     echo ""
     echo "Options:"
     echo "  --gemini               Also install Gemini PR review workflow"
-    echo "  --ai <providers>       Comma-separated provider list (e.g. claude,gemini)"
+    echo "  --ai <providers>       Comma-separated provider list (e.g. claude,gemini,notebooklm)"
     echo "  --with-gha-workflows   Also install extra workflow templates from"
     echo "                         github-workflow-templates/ in the source repo"
     echo ""
@@ -407,6 +449,26 @@ usage_gemini() {
     echo "  --with-gha-workflows   Also install extra workflow templates"
     echo "  --ai <providers>       Comma-separated provider list (accepted; use 'gemini' or 'all' instead)"
     echo "  --gemini               Equivalent to using the 'gemini' subcommand (accepted)"
+}
+
+usage_notebooklm() {
+    echo "Usage: $0 notebooklm <command> [options]"
+    echo ""
+    echo "Commands:"
+    echo "  install   Add NotebookLM sync workflow to your project (first-time setup)"
+    echo "  update    Pull the latest NotebookLM sync workflow"
+    echo ""
+    echo "This downloads:"
+    echo "  .github/workflows/sync-notebooklm.yml  - Automated NotebookLM sync on push to main"
+    echo "  .github/repomixignore                   - Universal ignore patterns for repomix"
+    echo "  (requires NLM_COOKIES_JSON and NLM_NOTEBOOK_ID secrets in repo)"
+    echo ""
+    echo "You must also create .github/notebooklm-sources.yaml defining your source splits."
+    echo "See: https://github.com/amulya-labs/ai-dev-foundry/blob/main/examples/notebooklm-sources.yaml"
+    echo ""
+    echo "Options:"
+    echo "  --with-gha-workflows   Also install extra workflow templates"
+    echo "  --ai <providers>       Comma-separated provider list"
 }
 
 usage_all() {
@@ -558,6 +620,17 @@ case "$AGENT" in
             install) install_config ;;
             update)  update_config ;;
             *)       usage_gemini; exit 1 ;;
+        esac
+        ;;
+    notebooklm)
+        if [ ${#PROVIDERS_ENABLED[@]} -eq 0 ]; then
+            PROVIDERS_ENABLED=("notebooklm")
+        fi
+        dedup_providers
+        case "${1:-}" in
+            install) install_config ;;
+            update)  update_config ;;
+            *)       usage_notebooklm; exit 1 ;;
         esac
         ;;
     all)
