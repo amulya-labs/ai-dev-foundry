@@ -335,11 +335,11 @@ else
     assert "usage_notebooklm() function exists" "fail"
 fi
 
-if grep -q "notebooklm)" "$MANAGE_SCRIPT"; then
+if grep -qE '^\s*(notebooklm\)|.*\|notebooklm[\|)])' "$MANAGE_SCRIPT"; then
     assert "Agent 'notebooklm' is handled in main case" "pass"
 else
     assert "Agent 'notebooklm' is handled in main case" "fail" \
-        "Expected notebooklm) case branch in main case statement"
+        "Expected notebooklm case branch in main case statement"
 fi
 
 echo
@@ -395,15 +395,28 @@ fi
 
 echo
 
+# ── handle_provider_command helper ───────────────────────────────────
+
+echo "=== handle_provider_command helper ==="
+
+if grep -q 'handle_provider_command()' "$MANAGE_SCRIPT"; then
+    assert "handle_provider_command() helper exists" "pass"
+else
+    assert "handle_provider_command() helper exists" "fail" \
+        "Expected handle_provider_command() function to reduce case duplication"
+fi
+
+echo
+
 # ── 'gemini' top-level agent ─────────────────────────────────────────
 
 echo "=== 'gemini' top-level agent ==="
 
-if grep -q "^    gemini)" "$MANAGE_SCRIPT" || grep -q "^gemini)" "$MANAGE_SCRIPT"; then
+if grep -qE '^\s*(gemini\)|.*\|gemini[\|)])' "$MANAGE_SCRIPT"; then
     assert "Agent 'gemini' is handled in main case" "pass"
 else
     assert "Agent 'gemini' is handled in main case" "fail" \
-        "Expected gemini) case branch in main case statement"
+        "Expected gemini case branch in main case statement"
 fi
 
 if grep -q 'usage_gemini()' "$MANAGE_SCRIPT"; then

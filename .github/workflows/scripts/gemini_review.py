@@ -457,7 +457,7 @@ def main() -> None:
         else:
             # Flash model or caching disabled: direct call
             findings = run_review_direct(client, SELECTED_MODEL, prompt)
-    except (ValueError, Exception) as exc:
+    except Exception as exc:
         die(f"Gemini review failed: {exc}")
 
     write_output(findings)

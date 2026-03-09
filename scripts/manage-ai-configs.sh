@@ -597,41 +597,30 @@ while [ $_i -lt ${#_args[@]} ]; do
 done
 set -- "${_final[@]+"${_final[@]}"}"
 
+# Handle a single-provider subcommand: default to that provider if --ai was not given,
+# then dispatch to install/update or show usage.
+handle_provider_command() {
+    local provider="$1"
+    local command="${2:-}"
+    local usage_func="usage_$provider"
+
+    # If --ai was not given, default to this provider only.
+    # If --ai was given, treat it as authoritative.
+    if [ ${#PROVIDERS_ENABLED[@]} -eq 0 ]; then
+        PROVIDERS_ENABLED=("$provider")
+    fi
+    dedup_providers
+
+    case "$command" in
+        install) install_config ;;
+        update)  update_config ;;
+        *)       "$usage_func"; exit 1 ;;
+    esac
+}
+
 case "$AGENT" in
-    claude)
-        # If --ai was not given, default to claude-only.
-        # If --ai was given, treat it as authoritative (supports "claude update --ai gemini" = Gemini-only).
-        if [ ${#PROVIDERS_ENABLED[@]} -eq 0 ]; then
-            PROVIDERS_ENABLED=("claude")
-        fi
-        dedup_providers
-        case "${1:-}" in
-            install) install_config ;;
-            update)  update_config ;;
-            *)       usage_claude; exit 1 ;;
-        esac
-        ;;
-    gemini)
-        if [ ${#PROVIDERS_ENABLED[@]} -eq 0 ]; then
-            PROVIDERS_ENABLED=("gemini")
-        fi
-        dedup_providers
-        case "${1:-}" in
-            install) install_config ;;
-            update)  update_config ;;
-            *)       usage_gemini; exit 1 ;;
-        esac
-        ;;
-    notebooklm)
-        if [ ${#PROVIDERS_ENABLED[@]} -eq 0 ]; then
-            PROVIDERS_ENABLED=("notebooklm")
-        fi
-        dedup_providers
-        case "${1:-}" in
-            install) install_config ;;
-            update)  update_config ;;
-            *)       usage_notebooklm; exit 1 ;;
-        esac
+    claude|gemini|notebooklm)
+        handle_provider_command "$AGENT" "${1:-}"
         ;;
     all)
         if [ ${#PROVIDERS_ENABLED[@]} -gt 0 ]; then

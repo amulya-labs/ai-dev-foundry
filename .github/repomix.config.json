@@ -55,6 +55,7 @@
       "*.sqlite3",
       "*.db",
 
+      ".env",
       "*.env",
       "*.env.*",
       "secrets/",
