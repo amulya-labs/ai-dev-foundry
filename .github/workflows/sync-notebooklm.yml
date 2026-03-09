@@ -1,0 +1,291 @@
+# Sync NotebookLM — Multi-source NotebookLM Project Brain Sync
+#
+# Reads .github/notebooklm-sources.yaml, runs repomix once per source split,
+# and uploads each as a separate source to a NotebookLM notebook.
+#
+# NotebookLM has NO public API — the `nlm` CLI uses internal browser-cookie
+# APIs.  For CI we restore the cookie file into the profile directory
+# that `nlm` expects (~/.notebooklm-mcp-cli/profiles/default/).
+#
+# Triggers:
+# - Push to main (automatic sync after every merge)
+# - Manual: Via GitHub Actions "Run workflow" button
+#
+# Required secrets (Settings → Secrets and variables → Actions):
+#   NLM_COOKIES_JSON   — contents of ~/.notebooklm-mcp-cli/profiles/default/cookies.json
+#   NLM_NOTEBOOK_ID    — target notebook UUID (from `nlm notebook list --quiet`)
+#
+# Cookies are stable for weeks.  When they expire the upload step will fail
+# with clear instructions on how to refresh.
+#
+# Source: https://github.com/amulya-labs/ai-dev-foundry
+# License: MIT (https://opensource.org/licenses/MIT)
+
+name: Sync NotebookLM
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: sync-notebooklm-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    name: Flatten & Upload to NotebookLM
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Validate config exists
+        run: |
+          if [ ! -f ".github/notebooklm-sources.yaml" ]; then
+            echo "::error::Missing .github/notebooklm-sources.yaml"
+            echo ""
+            echo "============================================================"
+            echo " HOW TO FIX — Create NotebookLM Source Config"
+            echo "============================================================"
+            echo ""
+            echo " Create .github/notebooklm-sources.yaml defining your source splits."
+            echo " See: https://github.com/amulya-labs/ai-dev-foundry/blob/main/examples/notebooklm-sources.yaml"
+            echo ""
+            echo "============================================================"
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install tools
+        run: |
+          npm install -g repomix
+          pip install notebooklm-mcp-cli pyyaml
+
+      - name: Generate sources from config
+        run: |
+          python3 << 'PYEOF'
+          import yaml, json, subprocess, sys, os
+
+          with open(".github/notebooklm-sources.yaml") as f:
+              config = yaml.safe_load(f)
+
+          if not isinstance(config, dict) or "sources" not in config:
+              print("::error::Invalid .github/notebooklm-sources.yaml: missing top-level 'sources' key.")
+              print("See: https://github.com/amulya-labs/ai-dev-foundry/blob/main/examples/notebooklm-sources.yaml")
+              sys.exit(1)
+
+          sources = config["sources"]
+          if not isinstance(sources, list) or len(sources) == 0:
+              print("::error::Invalid .github/notebooklm-sources.yaml: 'sources' must be a non-empty list.")
+              sys.exit(1)
+          MAX_WORDS = 500_000
+          failed = False
+
+          os.makedirs("nlm-sources", exist_ok=True)
+
+          for source in sources:
+              name = source["name"]
+              include = source.get("include", [])
+              ignore = source.get("ignore", [])
+              output_file = f"nlm-sources/{name}.txt"
+
+              cmd = ["repomix", "--style", "plain", "--output", output_file]
+              if os.path.isfile(".github/repomix.config.json"):
+                  cmd.extend(["--config", ".github/repomix.config.json"])
+              for pattern in include:
+                  cmd.extend(["--include", pattern])
+              for pattern in ignore:
+                  cmd.extend(["--ignore", pattern])
+              cmd.append(".")
+
+              print(f"\n{'='*60}")
+              print(f"Building source: {name}")
+              print(f"  include: {include}")
+              if ignore:
+                  print(f"  ignore:  {ignore}")
+              print(f"{'='*60}")
+
+              result = subprocess.run(cmd, capture_output=True, text=True)
+              if result.returncode != 0:
+                  print(f"::error::repomix failed for {name}")
+                  print(result.stderr)
+                  sys.exit(1)
+
+              with open(output_file) as f:
+                  word_count = len(f.read().split())
+
+              print(f"  → {name}: {word_count:,} words")
+
+              if word_count > MAX_WORDS:
+                  print(f"::error::{name} ({word_count:,} words) exceeds {MAX_WORDS:,} word limit")
+                  failed = True
+
+          if failed:
+              print("\n::error::One or more sources exceed the NotebookLM word limit.")
+              print("Split large sources into smaller ones in .github/notebooklm-sources.yaml.")
+              sys.exit(1)
+
+          manifest = [{"name": s["name"], "file": f"nlm-sources/{s['name']}.txt"} for s in sources]
+          with open("nlm-sources/manifest.json", "w") as f:
+              json.dump(manifest, f)
+
+          print(f"\nAll {len(sources)} sources generated successfully.")
+          PYEOF
+
+      - name: Restore nlm auth
+        env:
+          NLM_COOKIES_JSON: ${{ secrets.NLM_COOKIES_JSON }}
+        run: |
+          if [ -z "$NLM_COOKIES_JSON" ]; then
+            echo "::error::Missing required secret: NLM_COOKIES_JSON"
+            echo ""
+            echo "============================================================"
+            echo " HOW TO FIX — NotebookLM Cookie Setup"
+            echo "============================================================"
+            echo ""
+            echo " 1. Install the CLI:  pip install notebooklm-mcp-cli"
+            echo " 2. Authenticate:     nlm login"
+            echo "    (opens browser — log in to Google, cookies extracted automatically)"
+            echo " 3. Push cookies to GitHub:"
+            echo "    gh secret set NLM_COOKIES_JSON --repo ${{ github.repository }} < ~/.notebooklm-mcp-cli/profiles/default/cookies.json"
+            echo " 4. Re-run this workflow."
+            echo ""
+            echo "============================================================"
+            exit 1
+          fi
+
+          mkdir -p ~/.notebooklm-mcp-cli/profiles/default
+          printf '%s' "$NLM_COOKIES_JSON" > ~/.notebooklm-mcp-cli/profiles/default/cookies.json
+          chmod 600 ~/.notebooklm-mcp-cli/profiles/default/cookies.json
+
+      - name: Upload sources to NotebookLM
+        env:
+          NLM_NOTEBOOK_ID: ${{ secrets.NLM_NOTEBOOK_ID }}
+        run: |
+          if [ -z "$NLM_NOTEBOOK_ID" ]; then
+            echo "::error::Missing NLM_NOTEBOOK_ID secret."
+            echo ""
+            echo "============================================================"
+            echo " HOW TO FIX — Notebook ID Setup"
+            echo "============================================================"
+            echo ""
+            echo " 1. List notebooks:  nlm notebook list --quiet"
+            echo "    Or create one:   nlm notebook create \"My Project Brain\""
+            echo " 2. Copy the UUID and set the secret:"
+            echo "    echo -n 'THE-UUID' | gh secret set NLM_NOTEBOOK_ID --repo ${{ github.repository }}"
+            echo " 3. Re-run this workflow."
+            echo ""
+            echo "============================================================"
+            exit 1
+          fi
+
+          echo "Checking auth status..."
+          if ! nlm login --check 2>&1; then
+            echo ""
+            echo "::error::NotebookLM authentication failed — cookies have likely expired."
+            echo ""
+            echo "============================================================"
+            echo " HOW TO FIX — Refresh Expired Cookies"
+            echo "============================================================"
+            echo ""
+            echo " Cookies last a few weeks. Yours have expired. To refresh:"
+            echo ""
+            echo " 1. On your local machine, run:  nlm login"
+            echo "    (opens browser — log in to Google)"
+            echo " 2. Push the fresh cookies to GitHub:"
+            echo "    gh secret set NLM_COOKIES_JSON --repo ${{ github.repository }} < ~/.notebooklm-mcp-cli/profiles/default/cookies.json"
+            echo " 3. Re-run this workflow."
+            echo ""
+            echo "============================================================"
+            exit 1
+          fi
+
+          python3 << 'PYEOF'
+          import json, subprocess, sys, os
+
+          with open("nlm-sources/manifest.json") as f:
+              manifest = json.load(f)
+
+          notebook_id = os.environ["NLM_NOTEBOOK_ID"]
+          failed = False
+
+          # Fetch existing sources once (not per-entry) to build a name→id map
+          source_map = {}
+          list_result = subprocess.run(
+              ["nlm", "source", "list", notebook_id, "--quiet", "--title"],
+              capture_output=True, text=True
+          )
+          if list_result.returncode == 0:
+              for line in list_result.stdout.strip().split("\n"):
+                  parts = line.split(None, 1)
+                  if len(parts) == 2:
+                      source_map[parts[1].strip()] = parts[0]
+
+          for entry in manifest:
+              name = entry["name"]
+              filepath = entry["file"]
+              print(f"\n{'='*60}")
+              print(f"Syncing source: {name}")
+              print(f"{'='*60}")
+
+              # Exact match lookup (not substring)
+              old_source_id = source_map.get(name)
+
+              if old_source_id:
+                  print(f"  Deleting old source {old_source_id}...")
+                  del_result = subprocess.run(
+                      ["nlm", "source", "delete", old_source_id, "--confirm"],
+                      capture_output=True, text=True
+                  )
+                  if del_result.returncode != 0:
+                      print(f"::warning::Failed to delete old source {old_source_id} for {name}: {del_result.stderr.strip()}")
+                      # Continue to upload anyway — may create a duplicate, but better
+                      # than skipping the upload entirely
+
+              print(f"  Uploading {filepath}...")
+              result = subprocess.run(
+                  ["nlm", "source", "add", notebook_id, "--file", filepath, "--wait"],
+                  capture_output=True, text=True
+              )
+              if result.returncode != 0:
+                  print(f"::error::Failed to upload {name}")
+                  print(result.stderr)
+                  if old_source_id:
+                      print(f"::warning::Old source {old_source_id} ({name}) was deleted but upload failed. "
+                            f"Source will be re-created on the next successful run.")
+                  failed = True
+              else:
+                  print(f"  ✓ {name} uploaded successfully")
+
+          if failed:
+              print("\n::error::One or more sources failed to upload.")
+              sys.exit(1)
+
+          print(f"\nAll {len(manifest)} sources synced successfully.")
+          PYEOF
+
+      - name: Upload repomix artifacts (for inspection)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nlm-sources-${{ github.sha }}
+          path: nlm-sources/*.txt
+          retention-days: 7

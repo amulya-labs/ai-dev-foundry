@@ -1,0 +1,53 @@
+# NotebookLM source splits — each entry becomes a separate source in the notebook.
+# Per-source word limit: 500,000. Notebook limit: 300 sources.
+#
+# Copy this file to .github/notebooklm-sources.yaml in your repo and customize
+# the include/ignore patterns for your project structure.
+#
+# Fields:
+#   name:    Source name in NotebookLM (used to identify & replace on re-sync)
+#   include: Glob patterns passed to repomix --include
+#   ignore:  Extra glob patterns to exclude (on top of .github/repomixignore)
+#
+# Tips:
+#   - If a source exceeds 500k words, split it into smaller logical chunks
+#   - Use ignore to carve out subdirectories that belong to a different source
+#   - Source names are used for matching during re-sync; keep them stable
+#
+# Source: https://github.com/amulya-labs/ai-dev-foundry
+# License: MIT (https://opensource.org/licenses/MIT)
+
+sources:
+  - name: brain-core
+    description: Core application code
+    include:
+      - "src/**"
+    ignore:
+      - "src/tests/**"
+
+  - name: brain-tests
+    description: Test suite
+    include:
+      - "tests/**"
+
+  - name: brain-config
+    description: Configuration, schemas, and project metadata
+    include:
+      - "configs/**"
+      - "pyproject.toml"
+      - "package.json"
+      - "tsconfig.json"
+
+  - name: brain-infra
+    description: Deployment, CI/CD, and scripts
+    include:
+      - "infra/**"
+      - ".github/**"
+      - "scripts/**"
+
+  - name: brain-docs
+    description: Documentation
+    include:
+      - "docs/**"
+      - "README.md"
+      - "CONTRIBUTING.md"
