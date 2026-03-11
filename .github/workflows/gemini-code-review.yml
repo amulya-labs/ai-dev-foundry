@@ -351,14 +351,17 @@ jobs:
               )
             }]' /tmp/inline-comments.json)
 
-            gh api \
+            jq -n \
+              --arg commit_id "$HEAD_SHA" \
+              --arg body "" \
+              --arg event "COMMENT" \
+              --argjson comments "$COMMENTS" \
+              '{commit_id: $commit_id, body: $body, event: $event, comments: $comments}' \
+            | gh api \
               --method POST \
               -H "Accept: application/vnd.github+json" \
               "/repos/$REPO/pulls/$PR_NUMBER/reviews" \
-              --field commit_id="$HEAD_SHA" \
-              --field body="" \
-              --field event="COMMENT" \
-              --field "comments=$(echo "$COMMENTS")"
+              --input -
           fi
 
           # --- Phase 5: Apply labels ---
@@ -742,14 +745,17 @@ jobs:
               )
             }]' /tmp/inline-comments.json)
 
-            gh api \
+            jq -n \
+              --arg commit_id "$HEAD_SHA" \
+              --arg body "" \
+              --arg event "COMMENT" \
+              --argjson comments "$COMMENTS" \
+              '{commit_id: $commit_id, body: $body, event: $event, comments: $comments}' \
+            | gh api \
               --method POST \
               -H "Accept: application/vnd.github+json" \
               "/repos/$REPO/pulls/$PR_NUMBER/reviews" \
-              --field commit_id="$HEAD_SHA" \
-              --field body="" \
-              --field event="COMMENT" \
-              --field "comments=$(echo "$COMMENTS")"
+              --input -
           fi
 
           # --- Phase 5: Apply labels ---
