@@ -40,7 +40,7 @@ OUTPUT_FILE = os.environ.get("OUTPUT_FILE", "/tmp/inline-comments.json")
 TOKEN_LIMIT = 1_000_000
 
 # Minimum tokens needed to justify creating a context cache
-CACHE_MIN_TOKENS = 32_000
+CACHE_MIN_TOKENS = 4_096
 
 # Cache TTL: 12 hours in seconds
 CACHE_TTL_SECONDS = 12 * 3600
@@ -217,6 +217,40 @@ def parse_json_response(raw_text: str) -> list:
         raise ValueError(f"Failed to parse JSON response: {exc}") from exc
 
 
+def extract_response_text(response) -> str:
+    """
+    Extract the non-thought text from a Gemini response.
+
+    Gemini 2.5 models have thinking enabled by default, which means the
+    response may contain both thought parts and text parts.  response.text
+    can return None or raise when only thought parts are present.
+    This helper tries the fast path first, then iterates parts explicitly.
+    """
+    # Fast path: response.text works in most cases
+    try:
+        if response.text:
+            return response.text
+    except Exception as exc:
+        log(f"WARNING: response.text raised {type(exc).__name__}: {exc}")
+
+    # Fallback: iterate parts and skip thought parts
+    try:
+        parts = response.candidates[0].content.parts
+        text_parts = [p.text for p in parts if not getattr(p, "thought", False) and p.text]
+        if text_parts:
+            return "\n".join(text_parts)
+        # Log what we got for debugging
+        part_summary = [
+            f"thought={getattr(p, 'thought', '?')}, text={bool(p.text)}"
+            for p in parts
+        ]
+        log(f"WARNING: No non-thought text parts found. Parts: {part_summary}")
+    except (IndexError, AttributeError) as exc:
+        log(f"WARNING: Could not iterate response parts: {exc}")
+
+    return ""
+
+
 def _is_retryable_error(exc: Exception) -> bool:
     """Return True if the exception looks like a transient quota or server error."""
     msg = str(exc).lower()
@@ -350,7 +384,7 @@ def run_review_direct(client, model: str, prompt: str) -> list:
         )
 
     response = _call_with_retry(_call, f"generate_content ({model})")
-    raw = response.text or ""
+    raw = extract_response_text(response)
     return parse_json_response(raw)
 
 
@@ -377,7 +411,7 @@ def run_review_with_cache(client, model: str, cache_name: str, diff: str) -> lis
 
     try:
         response = _call_with_retry(_call, f"generate_content with cache ({model})")
-        raw = response.text or ""
+        raw = extract_response_text(response)
         return parse_json_response(raw)
     except ValueError:
         raise  # parse failures should not be silenced

@@ -78,7 +78,7 @@ jobs:
           fi
           gh pr comment "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --body "> $LABEL Gemini review in progress. [View run]($RUN_URL)"
+            --body "> 💎 **Gemini $LABEL Review** in progress… [View run]($RUN_URL)"
 
       - name: Check PR size
         id: pr-size
@@ -351,14 +351,17 @@ jobs:
               )
             }]' /tmp/inline-comments.json)
 
-            gh api \
+            jq -n \
+              --arg commit_id "$HEAD_SHA" \
+              --arg body "" \
+              --arg event "COMMENT" \
+              --argjson comments "$COMMENTS" \
+              '{commit_id: $commit_id, body: $body, event: $event, comments: $comments}' \
+            | gh api \
               --method POST \
               -H "Accept: application/vnd.github+json" \
               "/repos/$REPO/pulls/$PR_NUMBER/reviews" \
-              --field commit_id="$HEAD_SHA" \
-              --field body="" \
-              --field event="COMMENT" \
-              --field "comments=$(echo "$COMMENTS")"
+              --input -
           fi
 
           # --- Phase 5: Apply labels ---
@@ -377,6 +380,15 @@ jobs:
             gh label create "severity:high" --color "e4e669" --description "High severity finding" \
               --repo "$REPO" 2>/dev/null || true
             gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "severity:high" 2>/dev/null || true
+          fi
+
+          # --- Propagate Phase 2 failure ---
+          # All phases above (summary comment, inline comments, labels) have completed.
+          # Now fail the step so the "Post failure notice" fires and the job shows as failed.
+          PHASE2_STATUS=$(jq -r '.phase2_inline' /tmp/review-status.json)
+          if [[ "$PHASE2_STATUS" == failed:* ]]; then
+            echo "::error::Phase 2 inline review failed ($PHASE2_STATUS). Summary was still posted."
+            exit 1
           fi
 
       - name: Upload inline comments artifact
@@ -742,14 +754,17 @@ jobs:
               )
             }]' /tmp/inline-comments.json)
 
-            gh api \
+            jq -n \
+              --arg commit_id "$HEAD_SHA" \
+              --arg body "" \
+              --arg event "COMMENT" \
+              --argjson comments "$COMMENTS" \
+              '{commit_id: $commit_id, body: $body, event: $event, comments: $comments}' \
+            | gh api \
               --method POST \
               -H "Accept: application/vnd.github+json" \
               "/repos/$REPO/pulls/$PR_NUMBER/reviews" \
-              --field commit_id="$HEAD_SHA" \
-              --field body="" \
-              --field event="COMMENT" \
-              --field "comments=$(echo "$COMMENTS")"
+              --input -
           fi
 
           # --- Phase 5: Apply labels ---
@@ -768,6 +783,15 @@ jobs:
             gh label create "severity:high" --color "e4e669" --description "High severity finding" \
               --repo "$REPO" 2>/dev/null || true
             gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "severity:high" 2>/dev/null || true
+          fi
+
+          # --- Propagate Phase 2 failure ---
+          # All phases above (summary comment, inline comments, labels) have completed.
+          # Now fail the step so the "Post failure notice" fires and the job shows as failed.
+          PHASE2_STATUS=$(jq -r '.phase2_inline' /tmp/review-status.json)
+          if [[ "$PHASE2_STATUS" == failed:* ]]; then
+            echo "::error::Phase 2 inline review failed ($PHASE2_STATUS). Summary was still posted."
+            exit 1
           fi
 
       - name: Upload inline comments artifact
