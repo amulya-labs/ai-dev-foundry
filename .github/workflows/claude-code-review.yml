@@ -104,7 +104,7 @@ jobs:
         run: |
           gh pr comment "${{ steps.pr.outputs.number }}" \
             --repo "${{ github.repository }}" \
-            --body "> Review in progress. [View run]($RUN_URL)"
+            --body "> 🤖 **Claude Code Review** in progress… [View run]($RUN_URL)"
 
       - name: Check PR size
         id: pr-size
@@ -225,7 +225,7 @@ jobs:
 
           # Build comment body
           cat > /tmp/failure-notice.md <<EOF
-          > **Note:** The automated code review did not complete — $REASON.
+          > **Note:** The automated Claude code review did not complete — $REASON.
           >
           > Any inline comments posted above are valid findings, but the review may be incomplete.
           > [View workflow run]($RUN_URL) for details. Re-trigger with \`/claude-review\`.
@@ -378,7 +378,7 @@ jobs:
 
           # Build comment body
           cat > /tmp/failure-notice.md <<EOF
-          > **Note:** The automated code review did not complete — $REASON.
+          > **Note:** The automated Claude code review did not complete — $REASON.
           >
           > Any inline comments posted above are valid findings, but the review may be incomplete.
           > [View workflow run]($RUN_URL) for details. Re-trigger with \`/claude-review\`.

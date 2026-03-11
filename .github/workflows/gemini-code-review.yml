@@ -78,7 +78,7 @@ jobs:
           fi
           gh pr comment "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --body "> $LABEL Gemini review in progress. [View run]($RUN_URL)"
+            --body "> 💎 **Gemini $LABEL Review** in progress… [View run]($RUN_URL)"
 
       - name: Check PR size
         id: pr-size
