@@ -40,7 +40,7 @@ OUTPUT_FILE = os.environ.get("OUTPUT_FILE", "/tmp/inline-comments.json")
 TOKEN_LIMIT = 1_000_000
 
 # Minimum tokens needed to justify creating a context cache
-CACHE_MIN_TOKENS = 32_000
+CACHE_MIN_TOKENS = 4_096
 
 # Cache TTL: 12 hours in seconds
 CACHE_TTL_SECONDS = 12 * 3600
@@ -51,6 +51,22 @@ RETRY_BASE_DELAY_SECONDS = 2  # doubles each attempt: 2s, 4s, 8s
 
 # HTTP status codes that warrant a retry
 RETRYABLE_EXCEPTION_SUBSTRINGS = ("429", "500", "502", "503", "504", "quota", "rate")
+
+# JSON schema for structured output enforcement
+FINDING_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "file": {"type": "string"},
+            "line": {"type": "integer"},
+            "severity": {"type": "string", "enum": ["Critical", "High", "Medium", "Low"]},
+            "comment": {"type": "string"},
+            "suggestion": {"type": "string"},
+        },
+        "required": ["file", "line", "severity", "comment", "suggestion"],
+    },
+}
 
 # File extensions / name patterns to skip when building the cache corpus.
 # Covers lock files, build artifacts, compiled assets, AND common secret/credential files.
@@ -106,8 +122,7 @@ Each object must follow this schema:
 }}
 
 If you find no significant issues, return an empty JSON array: []
-Cap your response at 10 items. Prioritize Critical and High severity findings.
-Return ONLY the JSON array, nothing else."""
+Cap your response at 10 items. Prioritize Critical and High severity findings."""
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +230,31 @@ def parse_json_response(raw_text: str) -> list:
         raise ValueError(f"Response JSON is not an array: {type(parsed).__name__}")
     except json.JSONDecodeError as exc:
         raise ValueError(f"Failed to parse JSON response: {exc}") from exc
+
+
+def extract_response_text(response) -> str:
+    """
+    Extract the non-thought text from a Gemini response.
+
+    Gemini 2.5 models have thinking enabled by default, which means the
+    response may contain both thought parts and text parts.  response.text
+    can return None when the response only contains thought parts (edge case).
+    This helper iterates over parts explicitly to collect the actual output.
+    """
+    # Fast path: response.text works in most cases
+    if response.text:
+        return response.text
+
+    # Fallback: iterate parts and skip thought parts
+    try:
+        parts = response.candidates[0].content.parts
+        text_parts = [p.text for p in parts if not getattr(p, "thought", False) and p.text]
+        if text_parts:
+            return "\n".join(text_parts)
+    except (IndexError, AttributeError):
+        pass
+
+    return ""
 
 
 def _is_retryable_error(exc: Exception) -> bool:
@@ -346,11 +386,13 @@ def run_review_direct(client, model: str, prompt: str) -> list:
             config=types.GenerateContentConfig(
                 temperature=0.1,
                 max_output_tokens=4096,
+                response_mime_type="application/json",
+                response_json_schema=FINDING_SCHEMA,
             ),
         )
 
     response = _call_with_retry(_call, f"generate_content ({model})")
-    raw = response.text or ""
+    raw = extract_response_text(response)
     return parse_json_response(raw)
 
 
@@ -372,12 +414,14 @@ def run_review_with_cache(client, model: str, cache_name: str, diff: str) -> lis
                 temperature=0.1,
                 max_output_tokens=4096,
                 cached_content=cache_name,
+                response_mime_type="application/json",
+                response_json_schema=FINDING_SCHEMA,
             ),
         )
 
     try:
         response = _call_with_retry(_call, f"generate_content with cache ({model})")
-        raw = response.text or ""
+        raw = extract_response_text(response)
         return parse_json_response(raw)
     except ValueError:
         raise  # parse failures should not be silenced
