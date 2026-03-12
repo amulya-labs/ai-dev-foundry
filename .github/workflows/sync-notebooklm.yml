@@ -253,11 +253,23 @@ jobs:
                   print(f"::error::Expected JSON array from nlm source list, got {type(sources_json).__name__}")
                   print(f"Raw output: {list_result.stdout[:500]}")
                   sys.exit(1)
+              # Diagnostic: show raw JSON structure from first source
+              if sources_json:
+                  print(f"  Sample source keys: {list(sources_json[0].keys())}")
+                  print(f"  Sample source: {json.dumps(sources_json[0], indent=2)[:500]}")
+
               for src in sources_json:
-                  title = src.get("title", "").strip()
+                  # Try multiple field names — nlm CLI schema is not guaranteed
+                  raw_title = (src.get("title") or src.get("name") or src.get("label") or "").strip()
                   src_id = src.get("id", "")
-                  if title and src_id:
-                      source_map[title].append(src_id)
+                  if raw_title and src_id:
+                      # Normalize: strip common file extensions for matching
+                      normalized = raw_title
+                      for suffix in (".txt", ".md", ".pdf"):
+                          if normalized.endswith(suffix):
+                              normalized = normalized[:-len(suffix)]
+                              break
+                      source_map[normalized].append(src_id)
           except (json.JSONDecodeError, TypeError) as e:
               print(f"::error::Failed to parse nlm source list JSON: {e}")
               print(f"Raw output: {list_result.stdout[:500]}")
@@ -265,6 +277,8 @@ jobs:
 
           total_existing = sum(len(ids) for ids in source_map.values())
           print(f"Found {total_existing} existing source(s) across {len(source_map)} title(s)")
+          for title, ids in source_map.items():
+              print(f"  '{title}' → {len(ids)} source(s)")
 
           for entry in manifest:
               name = entry["name"]
