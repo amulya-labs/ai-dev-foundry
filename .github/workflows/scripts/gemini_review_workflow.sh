@@ -113,15 +113,24 @@ FLASH_MODEL="gemini-2.5-flash"
 # Post review-started notice (non-fatal)
 # ---------------------------------------------------------------------------
 
-if [[ "${COMMENT_BODY}" == /gemini-light-review* ]]; then
-  REVIEW_LABEL="Light"
-else
+if [[ "${COMMENT_BODY}" == /gemini-deep-review* ]]; then
   REVIEW_LABEL="Deep"
+  TRIGGER_CMD="/gemini-deep-review"
+elif [[ "${COMMENT_BODY}" == /gemini-light-review* ]]; then
+  REVIEW_LABEL="Light"
+  TRIGGER_CMD="/gemini-light-review"
+else
+  REVIEW_LABEL="Light"
+  TRIGGER_CMD="/gemini-review"
 fi
+
+# shellcheck disable=SC2016  # %s placeholders are for printf, not shell expansion
+printf '💎 **Gemini %s Review** in progress… [View run](%s)\n> Triggered by `%s`.' \
+  "$REVIEW_LABEL" "$RUN_URL" "$TRIGGER_CMD" > /tmp/review-started.md
 
 gh pr comment "$PR_NUMBER" \
   --repo "$REPO" \
-  --body "> 💎 **Gemini $REVIEW_LABEL Review** in progress… [View run]($RUN_URL)" \
+  --body-file /tmp/review-started.md \
   2>/dev/null || echo "WARNING: Failed to post review-started notice" >&2
 
 # ---------------------------------------------------------------------------
@@ -277,8 +286,8 @@ COUNT=$(jq 'length' /tmp/inline-comments.json)
 # Build summary comment
 # ---------------------------------------------------------------------------
 
-if [ "${MODE}" = "light" ]; then
-  RETRIGGER="/gemini-light-review"
+if [ "${MODE}" = "deep" ]; then
+  RETRIGGER="/gemini-deep-review"
 else
   RETRIGGER="/gemini-review"
 fi
