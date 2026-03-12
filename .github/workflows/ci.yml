@@ -156,6 +156,23 @@ jobs:
           echo "Running bash hook tests..."
           tests/test-validate-bash.sh
 
+  validate-gemini-review:
+    name: Validate Gemini Review Pipeline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pytest
+
+      - name: Run Gemini review tests
+        run: pytest tests/test_gemini_review.py -v
+
   validate-manage-configs:
     name: Validate manage-ai-configs.sh
     runs-on: ubuntu-latest

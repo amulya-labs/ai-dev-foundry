@@ -29,6 +29,9 @@ tests/test-validate-bash.sh allow    # or: ask, deny
 # manage-agents tests
 tests/test-manage-agents.sh
 
+# Gemini review pipeline tests (mocked API, real diff fixtures)
+pytest tests/test_gemini_review.py -v
+
 # Lint hook scripts
 shellcheck .claude/hooks/*.sh
 
@@ -49,7 +52,7 @@ for f in Path('.claude/agents').glob('*.md'):
 # Full CI-equivalent local check (run before pushing)
 shellcheck .claude/hooks/*.sh && \
   python3 -c "import tomllib; tomllib.load(open('.claude/hooks/bash-patterns.toml','rb'))" && \
-  pytest tests/test_validate_bash.py -v && \
+  pytest tests/test_validate_bash.py tests/test_gemini_review.py -v && \
   tests/test-validate-bash.sh && \
   tests/test-manage-agents.sh
 ```
@@ -68,7 +71,7 @@ shellcheck .claude/hooks/*.sh && \
 scripts/manage-ai-configs.sh -- Install/update AI agent configs and GHA workflows via curl from GitHub
 scripts/git-subtree-mgr  -- Git subtree manager for tracking upstream changes
 .github/workflows/       -- Live GitHub Actions: ci.yml, scorecard.yml, claude.yml, claude-code-review.yml
-tests/                   -- All tests: bash-test-cases.toml, test_validate_bash.py, test-validate-bash.sh, test-manage-agents.sh
+tests/                   -- All tests: bash-test-cases.toml, test_validate_bash.py, test-validate-bash.sh, test-manage-agents.sh, test_gemini_review.py
 .github/workflows/ci.yml -- CI job definitions (source of truth for what must pass)
 ```
 
@@ -116,6 +119,7 @@ tests/                   -- All tests: bash-test-cases.toml, test_validate_bash.
 
 - **Fastest loop** (< 1 sec): `pytest tests/test_validate_bash.py -v`
 - **Single test**: `pytest tests/test_validate_bash.py -v -k "docker_stop"`
+- **Gemini review tests**: `pytest tests/test_gemini_review.py -v` (mocked API, real diff fixtures)
 - **Shell integration**: `tests/test-validate-bash.sh` (or `tests/test-validate-bash.sh allow`)
 - **Ad-hoc pattern testing**: pipe JSON to the hook directly:
   ```bash
