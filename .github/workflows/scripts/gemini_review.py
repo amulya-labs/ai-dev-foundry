@@ -15,6 +15,8 @@ Environment variables:
   REPO             Required when USE_CACHE=1. Org/repo slug (e.g. owner/repo).
   USE_CACHE        Default: 0. Set to 1 to enable context caching (Pro only).
   OUTPUT_FILE      Default: /tmp/inline-comments.json. Where to write results.
+  METRICS_FILE     Default: /tmp/review-metrics-phase2.json. Token usage output.
+  CACHE_MANIFEST_PATH  Default: .github/gemini-cache-manifest.yml. Cache target config.
 """
 
 import json
@@ -35,6 +37,8 @@ SELECTED_MODEL = os.environ.get("SELECTED_MODEL", "gemini-2.5-flash")
 REPO = os.environ.get("REPO", "")
 USE_CACHE = os.environ.get("USE_CACHE", "0").strip() == "1"
 OUTPUT_FILE = os.environ.get("OUTPUT_FILE", "/tmp/inline-comments.json")
+METRICS_FILE = os.environ.get("METRICS_FILE", "/tmp/review-metrics-phase2.json")
+CACHE_MANIFEST_PATH = os.environ.get("CACHE_MANIFEST_PATH", ".github/gemini-cache-manifest.yml")
 
 # Maximum tokens before we bail out with an empty result
 TOKEN_LIMIT = 1_000_000
@@ -81,6 +85,9 @@ BINARY_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".svg",
     ".pdf", ".zip", ".tar", ".gz", ".whl", ".exe", ".so", ".dylib",
 }
+
+# Default glob patterns when no cache manifest is found
+DEFAULT_CACHE_PATTERNS = ["*.md", "docs/**/*.md"]
 
 
 # ---------------------------------------------------------------------------
@@ -159,29 +166,98 @@ def truncate_diff(diff: str, max_chars: int = 500_000) -> str:
     return truncated
 
 
+def parse_cache_manifest(manifest_path: str) -> list:
+    """
+    Parse a simple YAML cache manifest, returning include glob patterns.
+    Returns an empty list if the manifest doesn't exist or can't be parsed.
+
+    Handles the format:
+        include:
+          - "pattern1"
+          - "pattern2"
+    """
+    try:
+        content = Path(manifest_path).read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        return []
+
+    patterns = []
+    in_include = False
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("include:"):
+            in_include = True
+            continue
+        if in_include:
+            if stripped.startswith("- "):
+                pattern = stripped[2:].strip().strip('"').strip("'")
+                if pattern:
+                    patterns.append(pattern)
+            elif stripped and not stripped.startswith("#"):
+                break  # End of include list
+    return patterns
+
+
+def _validate_glob_pattern(pattern: str) -> bool:
+    """
+    Validate that a glob pattern is safe (no path traversal or absolute paths).
+    Returns True if the pattern is safe to use, False otherwise.
+    """
+    if os.path.isabs(pattern):
+        log(f"WARNING: Rejecting absolute glob pattern: {pattern}")
+        return False
+    if ".." in pattern:
+        log(f"WARNING: Rejecting glob pattern with path traversal: {pattern}")
+        return False
+    return True
+
+
 def build_cache_corpus() -> str:
     """
-    Walk the current directory and collect all text source files into a single
-    string to use as the context cache corpus. Skips binaries, lock files,
-    and secret/credential files to avoid uploading sensitive data to the API.
+    Collect text source files into a corpus for context caching.
+    Uses a manifest file if available, otherwise falls back to defaults.
+    Skips binaries, lock files, and secret/credential files.
+    Validates patterns and resolved paths to prevent directory traversal.
     """
+    cwd = Path(".").resolve()
+
+    # Try to load manifest patterns
+    manifest_patterns = parse_cache_manifest(CACHE_MANIFEST_PATH)
+
+    if manifest_patterns:
+        log(f"Using cache manifest from {CACHE_MANIFEST_PATH} ({len(manifest_patterns)} patterns)")
+        patterns = [p for p in manifest_patterns if _validate_glob_pattern(p)]
+    else:
+        log(f"No cache manifest at {CACHE_MANIFEST_PATH}; using defaults: {DEFAULT_CACHE_PATTERNS}")
+        patterns = DEFAULT_CACHE_PATTERNS
+
+    # Collect files matching patterns (deduplicate across patterns)
+    seen: set = set()
     parts = []
-    cwd = Path(".")
-    for path in sorted(cwd.rglob("*")):
-        if not path.is_file():
-            continue
-        rel = str(path)
-        # Skip by name pattern (lock files, build artifacts, secrets)
-        if SKIP_PATTERNS.search(rel):
-            continue
-        # Skip by extension
-        if path.suffix.lower() in BINARY_EXTENSIONS:
-            continue
-        try:
-            content = path.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            continue
-        parts.append(f"=== {rel} ===\n{content}\n")
+    for pattern in patterns:
+        for path in sorted(Path(".").glob(pattern)):
+            if not path.is_file():
+                continue
+            # Ensure resolved path is under the repo root (prevents symlink escapes)
+            resolved = path.resolve()
+            if not str(resolved).startswith(str(cwd)):
+                log(f"WARNING: Skipping file outside repo root: {path} -> {resolved}")
+                continue
+            rel = str(path)
+            if rel in seen:
+                continue
+            seen.add(rel)
+            if SKIP_PATTERNS.search(rel):
+                continue
+            if path.suffix.lower() in BINARY_EXTENSIONS:
+                continue
+            try:
+                content = path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            parts.append(f"=== {rel} ===\n{content}\n")
+
+    log(f"Cache corpus: {len(parts)} files included")
     return "\n".join(parts)
 
 
@@ -196,6 +272,14 @@ def write_output(data: list) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     log(f"Wrote {len(data)} finding(s) to {OUTPUT_FILE}")
+
+
+def write_metrics(usage: dict) -> None:
+    """Write token usage metrics to METRICS_FILE."""
+    metrics_path = Path(METRICS_FILE)
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    metrics_path.write_text(json.dumps(usage, indent=2), encoding="utf-8")
+    log(f"Wrote metrics to {METRICS_FILE}")
 
 
 def parse_json_response(raw_text: str) -> list:
@@ -264,6 +348,23 @@ def extract_response_text(response) -> str:
         log(f"WARNING: Could not iterate response parts: {exc}")
 
     return ""
+
+
+def _extract_usage_metadata(response) -> dict:
+    """Extract token usage metadata from a Gemini response."""
+    try:
+        usage = response.usage_metadata
+        if usage is None:
+            return {}
+        return {
+            "prompt_token_count": getattr(usage, "prompt_token_count", 0) or 0,
+            "candidates_token_count": getattr(usage, "candidates_token_count", 0) or 0,
+            "cached_content_token_count": getattr(usage, "cached_content_token_count", 0) or 0,
+            "total_token_count": getattr(usage, "total_token_count", 0) or 0,
+        }
+    except Exception as exc:
+        log(f"WARNING: Could not extract usage metadata: {exc}")
+        return {}
 
 
 def _is_retryable_error(exc: Exception) -> bool:
@@ -379,10 +480,25 @@ def create_cache(client, model: str, corpus: str, display_name: str):
 # Main review logic
 # ---------------------------------------------------------------------------
 
-def run_review_direct(client, model: str, prompt: str) -> list:
+def _thinking_config_for_model(model: str):
+    """
+    Return an appropriate ThinkingConfig for the given model.
+    Pro models get the full thinking budget; Flash models get thinking disabled
+    to avoid unnecessary latency and token cost on light reviews.
+    """
+    from google.genai import types
+
+    if "pro" in model.lower():
+        return types.ThinkingConfig(thinking_budget=REVIEW_THINKING_BUDGET)
+    # Flash: disable thinking to keep light reviews fast and cheap
+    return types.ThinkingConfig(thinking_budget=0)
+
+
+def run_review_direct(client, model: str, prompt: str) -> tuple:
     """
     Send the prompt directly to the model (no caching).
     Retries on transient 429/5xx errors with exponential backoff.
+    Returns (findings_list, usage_metadata_dict).
     """
     from google.genai import types
 
@@ -395,24 +511,24 @@ def run_review_direct(client, model: str, prompt: str) -> list:
             config=types.GenerateContentConfig(
                 temperature=0.1,
                 max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
-                thinking_config=types.ThinkingConfig(
-                    thinking_budget=REVIEW_THINKING_BUDGET,
-                ),
+                thinking_config=_thinking_config_for_model(model),
             ),
         )
 
     response = _call_with_retry(_call, f"generate_content ({model})")
+    usage = _extract_usage_metadata(response)
     raw = extract_response_text(response)
     if not raw.strip():
         log("WARNING: Model returned no text output (thinking-only response); treating as zero findings")
-        return []
-    return parse_json_response(raw)
+        return [], usage
+    return parse_json_response(raw), usage
 
 
-def run_review_with_cache(client, model: str, cache_name: str, diff: str) -> list:
+def run_review_with_cache(client, model: str, cache_name: str, diff: str) -> tuple:
     """
     Send the prompt with a context cache reference.
     Retries on transient errors; falls back to direct call on cache errors.
+    Returns (findings_list, usage_metadata_dict).
     """
     from google.genai import types
 
@@ -427,19 +543,18 @@ def run_review_with_cache(client, model: str, cache_name: str, diff: str) -> lis
                 temperature=0.1,
                 max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
                 cached_content=cache_name,
-                thinking_config=types.ThinkingConfig(
-                    thinking_budget=REVIEW_THINKING_BUDGET,
-                ),
+                thinking_config=_thinking_config_for_model(model),
             ),
         )
 
     try:
         response = _call_with_retry(_call, f"generate_content with cache ({model})")
+        usage = _extract_usage_metadata(response)
         raw = extract_response_text(response)
         if not raw.strip():
             log("WARNING: Model returned no text output (thinking-only response); treating as zero findings")
-            return []
-        return parse_json_response(raw)
+            return [], usage
+        return parse_json_response(raw), usage
     except ValueError:
         raise  # parse failures should not be silenced
     except Exception as exc:
@@ -459,6 +574,7 @@ def main() -> None:
     if not diff.strip():
         log("WARNING: Diff is empty; writing empty findings")
         write_output([])
+        write_metrics({})
         return
 
     # Build the full prompt for token counting and direct calls
@@ -488,6 +604,7 @@ def main() -> None:
             "skipping inline review to avoid quota exhaustion."
         )
         write_output([])
+        write_metrics({})
         return
 
     # Determine whether to use caching.
@@ -495,6 +612,7 @@ def main() -> None:
     # strings like "1.5" which would incorrectly classify gemini-1.5-flash as Pro.
     is_pro_model = "pro" in SELECTED_MODEL.lower()
 
+    usage = {}
     try:
         if USE_CACHE and is_pro_model and REPO:
             display_name = f"cache-{repo_slug(REPO)}"
@@ -503,7 +621,7 @@ def main() -> None:
             existing = find_existing_cache(client, display_name)
 
             if existing:
-                findings = run_review_with_cache(client, SELECTED_MODEL, existing.name, diff)
+                findings, usage = run_review_with_cache(client, SELECTED_MODEL, existing.name, diff)
             else:
                 # Build corpus and try to create a new cache
                 log("Building repo corpus for context cache...")
@@ -511,17 +629,18 @@ def main() -> None:
                 cache = create_cache(client, SELECTED_MODEL, corpus, display_name)
 
                 if cache:
-                    findings = run_review_with_cache(client, SELECTED_MODEL, cache.name, diff)
+                    findings, usage = run_review_with_cache(client, SELECTED_MODEL, cache.name, diff)
                 else:
                     # Cache unavailable — fall back to direct call
-                    findings = run_review_direct(client, SELECTED_MODEL, prompt)
+                    findings, usage = run_review_direct(client, SELECTED_MODEL, prompt)
         else:
             # Flash model or caching disabled: direct call
-            findings = run_review_direct(client, SELECTED_MODEL, prompt)
+            findings, usage = run_review_direct(client, SELECTED_MODEL, prompt)
     except Exception as exc:
         die(f"Gemini review failed: {exc}")
 
     write_output(findings)
+    write_metrics(usage)
 
 
 if __name__ == "__main__":

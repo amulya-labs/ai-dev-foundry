@@ -50,7 +50,10 @@ PROVIDER_GEMINI_SECRETS="GEMINI_API_KEY"
 PROVIDER_GEMINI_LABEL="Gemini"
 # Space-separated list of scripts under .github/workflows/scripts/ to download
 # shellcheck disable=SC2034
-PROVIDER_GEMINI_WORKFLOW_SCRIPTS="gemini_review.py"
+PROVIDER_GEMINI_WORKFLOW_SCRIPTS="gemini_review.py gemini_review_workflow.sh"
+# Extra files to install alongside workflows (relative to repo root)
+# shellcheck disable=SC2034
+PROVIDER_GEMINI_EXTRA_FILES=".github/gemini-cache-manifest.yml"
 # Gemini has no local config dir yet — leave unset
 
 # shellcheck disable=SC2034

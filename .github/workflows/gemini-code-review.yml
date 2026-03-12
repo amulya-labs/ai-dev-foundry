@@ -66,38 +66,6 @@ jobs:
           fetch-depth: 1
           ref: refs/pull/${{ github.event.issue.number }}/head
 
-      - name: Post review-started notice
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          COMMENT_BODY: ${{ github.event.comment.body }}
-        run: |
-          if [[ "$COMMENT_BODY" == /gemini-light-review* ]]; then
-            LABEL="Light"
-          else
-            LABEL="Deep"
-          fi
-          gh pr comment "${{ github.event.issue.number }}" \
-            --repo "${{ github.repository }}" \
-            --body "> 💎 **Gemini $LABEL Review** in progress… [View run]($RUN_URL)"
-
-      - name: Check PR size
-        id: pr-size
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          STATS=$(gh pr view "${{ github.event.issue.number }}" \
-            --repo "${{ github.repository }}" \
-            --json additions,deletions,changedFiles)
-          FILES=$(echo "$STATS" | jq '.changedFiles')
-          LINES=$(echo "$STATS" | jq '.additions + .deletions')
-          if [ "$FILES" -gt 50 ] || [ "$LINES" -gt 3000 ]; then
-            echo "strategy=summary" >> "$GITHUB_OUTPUT"
-          else
-            echo "strategy=detailed" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Install Python dependencies
         run: pip install google-genai --quiet
 
@@ -124,281 +92,22 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PR_NUMBER: ${{ github.event.issue.number }}
           REPO: ${{ github.repository }}
-          REVIEW_STRATEGY: ${{ steps.pr-size.outputs.strategy }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SELECTED_MODEL: ${{ steps.model.outputs.model }}
           MODE: ${{ steps.model.outputs.mode }}
           USE_CACHE: ${{ steps.model.outputs.use_cache }}
-        run: |
-          # Helper: call Gemini API with exponential-backoff retry on 429/5xx
-          # $1 = URL, $2 = path to JSON payload file (avoids ARG_MAX with large diffs)
-          gemini_api_call() {
-            local url="$1" payload_file="$2"
-            local attempt delay http_code
-            delay=2
-            for attempt in 1 2 3; do
-              http_code=$(curl -s \
-                -o /tmp/gemini-resp.json \
-                -w '%{http_code}' \
-                "$url" -H 'Content-Type: application/json' -d "@$payload_file" 2>/dev/null)
-              case "$http_code" in
-                200) cat /tmp/gemini-resp.json; return 0 ;;
-                429|500|502|503|504)
-                  echo "WARNING: Gemini API HTTP $http_code (attempt $attempt/3); retrying in ${delay}s..." >&2
-                  sleep "$delay"; delay=$((delay * 2)) ;;
-                *)
-                  echo "ERROR: Gemini API HTTP $http_code (non-retryable)" >&2
-                  cat /tmp/gemini-resp.json >&2; return 1 ;;
-              esac
-            done
-            echo "ERROR: Gemini API failed after 3 attempts (last HTTP $http_code)" >&2
-            cat /tmp/gemini-resp.json >&2
-            return 1
-          }
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          SCRIPT_SOURCE: local
+        run: bash .github/workflows/scripts/gemini_review_workflow.sh
 
-          # Phase-status tracking: record what actually happened in each phase
-          # so the summary comment can distinguish "no findings" from "did not run"
-          echo '{"phase1_summary":"pending","phase2_inline":"pending"}' > /tmp/review-status.json
-          update_status() { # $1=key, $2=value
-            local tmp; tmp=$(jq --arg k "$1" --arg v "$2" '.[$k] = $v' /tmp/review-status.json)
-            echo "$tmp" > /tmp/review-status.json
-          }
-
-          FLASH_MODEL="gemini-2.5-flash"
-
-          # Fetch PR metadata
-          gh pr view "$PR_NUMBER" \
-            --repo "$REPO" \
-            --json title,body,additions,deletions,changedFiles,headRefOid \
-            > /tmp/pr-meta.json
-
-          PR_TITLE=$(jq -r '.title' /tmp/pr-meta.json)
-          PR_BODY=$(jq -r '.body // ""' /tmp/pr-meta.json)
-          HEAD_SHA=$(jq -r '.headRefOid' /tmp/pr-meta.json)
-          FILES=$(jq '.changedFiles' /tmp/pr-meta.json)
-          LINES=$(jq '.additions + .deletions' /tmp/pr-meta.json)
-
-          # Fetch diff (truncate at 500000 chars to stay within AI Pro token budget)
-          gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/pr-full.diff
-          DIFF_CHARS=$(wc -c < /tmp/pr-full.diff)
-          if [ "$DIFF_CHARS" -gt 500000 ]; then
-            head -c 500000 /tmp/pr-full.diff > /tmp/pr.diff
-            printf '\n[DIFF TRUNCATED: full diff is %s chars; only first 500000 shown]\n' "$DIFF_CHARS" >> /tmp/pr.diff
-          else
-            cp /tmp/pr-full.diff /tmp/pr.diff
-          fi
-
-          # Filter non-code files before sending to Pro (lock files, compiled assets, data files)
-          python3 -c '
-          import sys, re
-          SKIP = re.compile(r"package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|Gemfile\.lock|poetry\.lock|composer\.lock|\.min\.(js|css)|\.csv$|\.tsv$")
-          skip = False
-          for line in sys.stdin:
-              if line.startswith("diff --git"):
-                  skip = bool(SKIP.search(line))
-              if not skip:
-                  sys.stdout.write(line)
-          ' < /tmp/pr.diff > /tmp/pr-focused.diff
-          # Light review: skip inline comments regardless of PR size
-          if [ "${MODE}" = "light" ]; then
-            REVIEW_STRATEGY="summary"
-          fi
-
-          # --- Phase 1: Summary via Gemini Flash ---
-          # Write prompt to a file to avoid ARG_MAX when passing large diffs to jq/curl
-          if [ "${MODE}" = "light" ]; then
-            printf 'You are performing a QUICK code review of this pull request.\n\nPR Title: %s\n%s files changed, %s lines (additions + deletions)\n\nGit Diff:\n' \
-              "$PR_TITLE" "$FILES" "$LINES" > /tmp/summary-prompt.txt
-            cat /tmp/pr.diff >> /tmp/summary-prompt.txt
-            printf '\nQuick scan — focus only on:\n1. Obvious bugs or logic errors\n2. Security issues (injection, auth, exposed secrets)\n3. Breaking changes or missing error handling\n\nFormat: two short paragraphs (no headers, no bullets, no bold labels).\nFirst: what the PR does in one sentence, then any critical issues found.\nSecond: overall verdict — looks good / needs changes / flag for deep review.\nKeep it under 100 words. If purely mechanical (renames, deps, formatting), just confirm it looks fine.' \
-              >> /tmp/summary-prompt.txt
-          else
-            printf 'You are an experienced engineering lead reviewing a pull request for your team.\nWrite a concise narrative summary of these changes in exactly three paragraphs — no headers, no bullet points, no bold labels.\n\nPR Title: %s\nPR Description: %s\n\nGit Diff:\n' \
-              "$PR_TITLE" "$PR_BODY" > /tmp/summary-prompt.txt
-            cat /tmp/pr.diff >> /tmp/summary-prompt.txt
-            printf '\nFirst paragraph: Describe the overall intent and motivation for the change in plain language.\nSecond paragraph: Explain the key technical decisions — what logic was added, restructured, or removed, and why it matters.\nThird paragraph: Give your honest read on the nature of this change (e.g. a targeted bug fix, a careful refactor, a broad feature addition) and flag any areas that deserve closer attention during review.\n\nWrite as a thoughtful colleague, not as a template-filling bot. Keep it under 200 words total.\nDo not include any markdown headers or code fences in your response.' \
-              >> /tmp/summary-prompt.txt
-          fi
-
-          jq -n --rawfile prompt /tmp/summary-prompt.txt '{
-            contents: [{parts: [{text: $prompt}]}],
-            generationConfig: {temperature: 0.3, maxOutputTokens: 512}
-          }' > /tmp/gemini-flash-payload.json
-
-          FLASH_RESPONSE=$(gemini_api_call \
-            "https://generativelanguage.googleapis.com/v1beta/models/${FLASH_MODEL}:generateContent?key=${GEMINI_API_KEY}" \
-            "/tmp/gemini-flash-payload.json") || true
-
-          SUMMARY_TEXT=$(echo "$FLASH_RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null)
-          if [ -z "$SUMMARY_TEXT" ]; then
-            FLASH_ERROR=$(echo "$FLASH_RESPONSE" | jq -r '.error | "[\(.code)] \(.message)" // "unknown error"' 2>/dev/null)
-            echo "ERROR: Gemini Flash API call failed: $FLASH_ERROR" >&2
-            update_status phase1_summary "failed:$FLASH_ERROR"
-            exit 1
-          fi
-          update_status phase1_summary "success"
-
-          # --- Phase 2: Inline review via Gemini (focused diff — code files only) ---
-          # Phase 2 errors are non-fatal: a failure here should not prevent posting the
-          # Phase 1 summary. The status is recorded and surfaced in the comment instead.
-          if [ "${REVIEW_STRATEGY:-detailed}" = "summary" ]; then
-            echo "PR too large or light-review requested; skipping inline review." >&2
-            echo "[]" > /tmp/inline-comments.json
-            update_status phase2_inline "skipped:summary_only"
-          else
-            if DIFF_FOCUSED="/tmp/pr-focused.diff" \
-              SELECTED_MODEL="${SELECTED_MODEL}" \
-              USE_CACHE="${USE_CACHE}" \
-              OUTPUT_FILE="/tmp/inline-comments.json" \
-              python3 .github/workflows/scripts/gemini_review.py; then
-              update_status phase2_inline "success"
-            else
-              echo "ERROR: Phase 2 (inline review) failed with exit code $?" >&2
-              update_status phase2_inline "failed:script_error"
-              echo "[]" > /tmp/inline-comments.json
-            fi
-          fi
-
-          COUNT=$(jq 'length' /tmp/inline-comments.json)
-
-          # Determine retrigger command for footer
-          if [ "${MODE}" = "light" ]; then
-            RETRIGGER="/gemini-light-review"
-          else
-            RETRIGGER="/gemini-review"
-          fi
-
-          # --- Phase 3: Build review body and upsert summary comment (edit existing or create new) ---
-          {
-            echo "## Gemini Code Review"
-            echo ""
-            echo "_Automated review by [Gemini](https://gemini.google.com/) via [ai-dev-foundry](https://github.com/amulya-labs/ai-dev-foundry) (${WORKFLOW_VERSION:0:7}). Re-trigger with \`$RETRIGGER\`._"
-            echo ""
-            echo "$SUMMARY_TEXT"
-            echo ""
-
-            PHASE2=$(jq -r '.phase2_inline' /tmp/review-status.json)
-            if [ "$COUNT" -gt 0 ]; then
-              echo "---"
-              echo ""
-              echo "### Findings ($COUNT)"
-              echo ""
-              echo "| Severity | File | Issue |"
-              echo "|----------|------|-------|"
-              jq -r '.[] | "| \(.severity) | `\(.file)` | \(.comment | gsub("\n"; " ") | .[0:120]) |"' \
-                /tmp/inline-comments.json
-              echo ""
-              echo "_Inline comments are posted directly on the diff._"
-            elif [ "${MODE}" = "light" ]; then
-              echo ""
-              echo "_Light review — run \`/gemini-review\` for a deep review with inline comments._"
-            elif [[ "$PHASE2" == skipped:* ]]; then
-              echo "---"
-              echo ""
-              SKIP_REASON="${PHASE2#skipped:}"
-              if [ "$SKIP_REASON" = "summary_only" ]; then
-                echo "_Inline review skipped: PR is large (${FILES} files, ${LINES} lines). Summary only._"
-              elif [ "$SKIP_REASON" = "curl_fetch_failed" ]; then
-                echo "> **Warning:** Inline review could not run — the review script failed to download. Summary review above is still valid."
-              elif [ "$SKIP_REASON" = "script_empty" ]; then
-                echo "> **Warning:** Inline review could not run — the review script was empty. Summary review above is still valid."
-              else
-                echo "> **Warning:** Inline review was skipped ($SKIP_REASON). Summary review above is still valid."
-              fi
-            elif [[ "$PHASE2" == failed:* ]]; then
-              echo "---"
-              echo ""
-              echo "> **Warning:** Inline review failed (${PHASE2#failed:}). Summary review above is still valid."
-            else
-              echo "---"
-              echo ""
-              echo "No significant issues found by Gemini Pro inline review."
-            fi
-          } > /tmp/review-body.md
-
-          # Find an existing Gemini review comment posted by github-actions[bot] and edit it;
-          # fall back to creating a new comment if none exists yet.
-          EXISTING_ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
-            --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("## Gemini Code Review"))] | last | .id // empty' \
-            2>/dev/null || true)
-
-          if [ -n "$EXISTING_ID" ]; then
-            gh api \
-              --method PATCH \
-              -H "Accept: application/vnd.github+json" \
-              "/repos/$REPO/issues/comments/$EXISTING_ID" \
-              --field body="$(cat /tmp/review-body.md)"
-          else
-            gh pr comment "$PR_NUMBER" \
-              --repo "$REPO" \
-              --body-file /tmp/review-body.md
-          fi
-
-          # --- Phase 4: Post inline review comments (if any) ---
-          if [ "$COUNT" -gt 0 ]; then
-            echo "Posting $COUNT inline comment(s) via GitHub Reviews API..."
-
-            # Map each finding to a review comment using line + side instead of position,
-            # so comments land on the correct line rather than always at position 1.
-            COMMENTS=$(jq --arg footer "$INLINE_ATTRIBUTION" '[.[] | {
-              path: .file,
-              line: .line,
-              side: "RIGHT",
-              body: (
-                "**[\(.severity)]** \(.comment)" +
-                (if (.suggestion != null and .suggestion != "") then
-                  "\n\n```suggestion\n\(.suggestion)\n```"
-                else "" end) +
-                $footer
-              )
-            }]' /tmp/inline-comments.json)
-
-            jq -n \
-              --arg commit_id "$HEAD_SHA" \
-              --arg body "" \
-              --arg event "COMMENT" \
-              --argjson comments "$COMMENTS" \
-              '{commit_id: $commit_id, body: $body, event: $event, comments: $comments}' \
-            | gh api \
-              --method POST \
-              -H "Accept: application/vnd.github+json" \
-              "/repos/$REPO/pulls/$PR_NUMBER/reviews" \
-              --input -
-          fi
-
-          # --- Phase 5: Apply labels ---
-          CRITICAL=$(jq '[.[] | select(.severity == "Critical")] | length' /tmp/inline-comments.json)
-          HIGH=$(jq '[.[] | select(.severity == "High")] | length' /tmp/inline-comments.json)
-
-          gh label create "ai-reviewed" --color "0075ca" --description "Reviewed by AI" \
-            --repo "$REPO" 2>/dev/null || true
-          gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "ai-reviewed" 2>/dev/null || true
-
-          if [ "$CRITICAL" -gt 0 ]; then
-            gh label create "severity:critical" --color "d73a4a" --description "Critical severity finding" \
-              --repo "$REPO" 2>/dev/null || true
-            gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "severity:critical" 2>/dev/null || true
-          elif [ "$HIGH" -gt 0 ]; then
-            gh label create "severity:high" --color "e4e669" --description "High severity finding" \
-              --repo "$REPO" 2>/dev/null || true
-            gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "severity:high" 2>/dev/null || true
-          fi
-
-          # --- Propagate Phase 2 failure ---
-          # All phases above (summary comment, inline comments, labels) have completed.
-          # Now fail the step so the "Post failure notice" fires and the job shows as failed.
-          PHASE2_STATUS=$(jq -r '.phase2_inline' /tmp/review-status.json)
-          if [[ "$PHASE2_STATUS" == failed:* ]]; then
-            echo "::error::Phase 2 inline review failed ($PHASE2_STATUS). Summary was still posted."
-            exit 1
-          fi
-
-      - name: Upload inline comments artifact
+      - name: Upload review artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: inline-comments-${{ github.event.issue.number }}
-          path: /tmp/inline-comments.json
+          name: gemini-review-${{ github.event.issue.number }}
+          path: |
+            /tmp/inline-comments.json
+            /tmp/review-metrics.json
           if-no-files-found: ignore
           retention-days: 7
 
@@ -413,12 +122,8 @@ jobs:
           REPO: ${{ github.repository }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
-          # Skip if review succeeded
-          if [ "$REVIEW_OUTCOME" = "success" ]; then
-            exit 0
-          fi
+          if [ "$REVIEW_OUTCOME" = "success" ]; then exit 0; fi
 
-          # Determine failure reason
           if [ "$JOB_STATUS" = "cancelled" ]; then
             REASON="cancelled (superseded by a newer push or manually stopped)"
           elif [ -z "$REVIEW_OUTCOME" ] || [ "$REVIEW_OUTCOME" = "skipped" ]; then
@@ -427,13 +132,9 @@ jobs:
             REASON="failed (API error, timeout, or internal error)"
           fi
 
-          if [[ "$COMMENT_BODY" == /gemini-light-review* ]]; then
-            RETRIGGER="/gemini-light-review"
-          elif [[ "$COMMENT_BODY" == /gemini-deep-review* ]]; then
-            RETRIGGER="/gemini-deep-review"
-          else
-            RETRIGGER="/gemini-review"
-          fi
+          if [[ "$COMMENT_BODY" == /gemini-light-review* ]]; then RETRIGGER="/gemini-light-review"
+          elif [[ "$COMMENT_BODY" == /gemini-deep-review* ]]; then RETRIGGER="/gemini-deep-review"
+          else RETRIGGER="/gemini-review"; fi
 
           cat > /tmp/failure-notice.md <<EOF
           > **Note:** The automated Gemini code review did not complete — $REASON.
@@ -513,296 +214,25 @@ jobs:
           SELECTED_MODEL: ${{ steps.model.outputs.model }}
           MODE: ${{ steps.model.outputs.mode }}
           USE_CACHE: "0"
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          SCRIPT_SOURCE: remote
         run: |
-          # Helper: call Gemini API with exponential-backoff retry on 429/5xx
-          # $1 = URL, $2 = path to JSON payload file (avoids ARG_MAX with large diffs)
-          gemini_api_call() {
-            local url="$1" payload_file="$2"
-            local attempt delay http_code
-            delay=2
-            for attempt in 1 2 3; do
-              http_code=$(curl -s \
-                -o /tmp/gemini-resp.json \
-                -w '%{http_code}' \
-                "$url" -H 'Content-Type: application/json' -d "@$payload_file" 2>/dev/null)
-              case "$http_code" in
-                200) cat /tmp/gemini-resp.json; return 0 ;;
-                429|500|502|503|504)
-                  echo "WARNING: Gemini API HTTP $http_code (attempt $attempt/3); retrying in ${delay}s..." >&2
-                  sleep "$delay"; delay=$((delay * 2)) ;;
-                *)
-                  echo "ERROR: Gemini API HTTP $http_code (non-retryable)" >&2
-                  cat /tmp/gemini-resp.json >&2; return 1 ;;
-              esac
-            done
-            echo "ERROR: Gemini API failed after 3 attempts (last HTTP $http_code)" >&2
-            cat /tmp/gemini-resp.json >&2
-            return 1
-          }
+          # Fetch shared workflow script from default branch (not PR code)
+          curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github.raw+json" \
+            "https://api.github.com/repos/${REPO}/contents/.github/workflows/scripts/gemini_review_workflow.sh" \
+            -o /tmp/gemini_review_workflow.sh
+          bash /tmp/gemini_review_workflow.sh
 
-          # Phase-status tracking: record what actually happened in each phase
-          echo '{"phase1_summary":"pending","phase2_inline":"pending"}' > /tmp/review-status.json
-          update_status() { # $1=key, $2=value
-            local tmp; tmp=$(jq --arg k "$1" --arg v "$2" '.[$k] = $v' /tmp/review-status.json)
-            echo "$tmp" > /tmp/review-status.json
-          }
-
-          FLASH_MODEL="gemini-2.5-flash"
-
-          # Fetch PR metadata (no local checkout — use gh with --repo for all access)
-          gh pr view "$PR_NUMBER" \
-            --repo "$REPO" \
-            --json title,body,additions,deletions,changedFiles,headRefOid \
-            > /tmp/pr-meta.json
-
-          PR_TITLE=$(jq -r '.title' /tmp/pr-meta.json)
-          PR_BODY=$(jq -r '.body // ""' /tmp/pr-meta.json)
-          HEAD_SHA=$(jq -r '.headRefOid' /tmp/pr-meta.json)
-          FILES=$(jq '.changedFiles' /tmp/pr-meta.json)
-          LINES=$(jq '.additions + .deletions' /tmp/pr-meta.json)
-
-          # Determine strategy (large PR = summary only)
-          if [ "$FILES" -gt 50 ] || [ "$LINES" -gt 3000 ]; then
-            REVIEW_STRATEGY="summary"
-          else
-            REVIEW_STRATEGY="detailed"
-          fi
-
-          # Fetch diff (truncate at 500000 chars to stay within AI Pro token budget)
-          gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/pr-full.diff
-          DIFF_CHARS=$(wc -c < /tmp/pr-full.diff)
-          if [ "$DIFF_CHARS" -gt 500000 ]; then
-            head -c 500000 /tmp/pr-full.diff > /tmp/pr.diff
-            printf '\n[DIFF TRUNCATED: full diff is %s chars; only first 500000 shown]\n' "$DIFF_CHARS" >> /tmp/pr.diff
-          else
-            cp /tmp/pr-full.diff /tmp/pr.diff
-          fi
-
-          # Filter non-code files before sending to Pro (lock files, compiled assets, data files)
-          python3 -c '
-          import sys, re
-          SKIP = re.compile(r"package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|Gemfile\.lock|poetry\.lock|composer\.lock|\.min\.(js|css)|\.csv$|\.tsv$")
-          skip = False
-          for line in sys.stdin:
-              if line.startswith("diff --git"):
-                  skip = bool(SKIP.search(line))
-              if not skip:
-                  sys.stdout.write(line)
-          ' < /tmp/pr.diff > /tmp/pr-focused.diff
-          # Light review: skip inline comments regardless of PR size
-          if [ "${MODE}" = "light" ]; then
-            REVIEW_STRATEGY="summary"
-          fi
-
-          # --- Phase 1: Summary via Gemini Flash ---
-          # Write prompt to a file to avoid ARG_MAX when passing large diffs to jq/curl
-          if [ "${MODE}" = "light" ]; then
-            printf 'You are performing a QUICK code review of this pull request.\n\nPR Title: %s\n%s files changed, %s lines (additions + deletions)\n\nGit Diff:\n' \
-              "$PR_TITLE" "$FILES" "$LINES" > /tmp/summary-prompt.txt
-            cat /tmp/pr.diff >> /tmp/summary-prompt.txt
-            printf '\nQuick scan — focus only on:\n1. Obvious bugs or logic errors\n2. Security issues (injection, auth, exposed secrets)\n3. Breaking changes or missing error handling\n\nFormat: two short paragraphs (no headers, no bullets, no bold labels).\nFirst: what the PR does in one sentence, then any critical issues found.\nSecond: overall verdict — looks good / needs changes / flag for deep review.\nKeep it under 100 words. If purely mechanical (renames, deps, formatting), just confirm it looks fine.' \
-              >> /tmp/summary-prompt.txt
-          else
-            printf 'You are an experienced engineering lead reviewing a pull request for your team.\nWrite a concise narrative summary of these changes in exactly three paragraphs — no headers, no bullet points, no bold labels.\n\nPR Title: %s\nPR Description: %s\n\nGit Diff:\n' \
-              "$PR_TITLE" "$PR_BODY" > /tmp/summary-prompt.txt
-            cat /tmp/pr.diff >> /tmp/summary-prompt.txt
-            printf '\nFirst paragraph: Describe the overall intent and motivation for the change in plain language.\nSecond paragraph: Explain the key technical decisions — what logic was added, restructured, or removed, and why it matters.\nThird paragraph: Give your honest read on the nature of this change (e.g. a targeted bug fix, a careful refactor, a broad feature addition) and flag any areas that deserve closer attention during review.\n\nWrite as a thoughtful colleague, not as a template-filling bot. Keep it under 200 words total.\nDo not include any markdown headers or code fences in your response.' \
-              >> /tmp/summary-prompt.txt
-          fi
-
-          jq -n --rawfile prompt /tmp/summary-prompt.txt '{
-            contents: [{parts: [{text: $prompt}]}],
-            generationConfig: {temperature: 0.3, maxOutputTokens: 512}
-          }' > /tmp/gemini-flash-payload.json
-
-          FLASH_RESPONSE=$(gemini_api_call \
-            "https://generativelanguage.googleapis.com/v1beta/models/${FLASH_MODEL}:generateContent?key=${GEMINI_API_KEY}" \
-            "/tmp/gemini-flash-payload.json") || true
-
-          SUMMARY_TEXT=$(echo "$FLASH_RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null)
-          if [ -z "$SUMMARY_TEXT" ]; then
-            FLASH_ERROR=$(echo "$FLASH_RESPONSE" | jq -r '.error | "[\(.code)] \(.message)" // "unknown error"' 2>/dev/null)
-            echo "ERROR: Gemini Flash API call failed: $FLASH_ERROR" >&2
-            update_status phase1_summary "failed:$FLASH_ERROR"
-            exit 1
-          fi
-          update_status phase1_summary "success"
-
-          # --- Phase 2: Inline review via Gemini (focused diff — code files only) ---
-          if [ "$REVIEW_STRATEGY" = "summary" ]; then
-            echo "PR too large or light-review requested; skipping inline review." >&2
-            echo "[]" > /tmp/inline-comments.json
-            update_status phase2_inline "skipped:summary_only"
-          else
-            # Fetch gemini_review.py from the default branch of this repository
-            # (safe: this is the workflow owner's own code, not PR author's code)
-            if ! curl -fsSL \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github.raw+json" \
-              "https://api.github.com/repos/${REPO}/contents/.github/workflows/scripts/gemini_review.py" \
-              -o /tmp/gemini_review.py; then
-              echo "WARNING: curl failed to fetch gemini_review.py (exit $?); skipping inline review." >&2
-              echo "[]" > /tmp/inline-comments.json
-              update_status phase2_inline "skipped:curl_fetch_failed"
-            elif [ ! -s /tmp/gemini_review.py ]; then
-              echo "WARNING: gemini_review.py was fetched but is empty; skipping inline review." >&2
-              echo "[]" > /tmp/inline-comments.json
-              update_status phase2_inline "skipped:script_empty"
-            else
-              if DIFF_FOCUSED="/tmp/pr-focused.diff" \
-                SELECTED_MODEL="${SELECTED_MODEL}" \
-                USE_CACHE="0" \
-                OUTPUT_FILE="/tmp/inline-comments.json" \
-                python3 /tmp/gemini_review.py; then
-                update_status phase2_inline "success"
-              else
-                echo "ERROR: Phase 2 (inline review) failed with exit code $?" >&2
-                update_status phase2_inline "failed:script_error"
-                echo "[]" > /tmp/inline-comments.json
-              fi
-            fi
-          fi
-
-          COUNT=$(jq 'length' /tmp/inline-comments.json)
-
-          # Determine retrigger command for footer
-          if [ "${MODE}" = "light" ]; then
-            RETRIGGER="/gemini-light-review"
-          else
-            RETRIGGER="/gemini-review"
-          fi
-
-          # --- Phase 3: Build review body and upsert summary comment (edit existing or create new) ---
-          {
-            echo "## Gemini Code Review"
-            echo ""
-            echo "_Automated review by [Gemini](https://gemini.google.com/) via [ai-dev-foundry](https://github.com/amulya-labs/ai-dev-foundry) (${WORKFLOW_VERSION:0:7}). Re-trigger with \`$RETRIGGER\`._"
-            echo ""
-            echo "$SUMMARY_TEXT"
-            echo ""
-
-            PHASE2=$(jq -r '.phase2_inline' /tmp/review-status.json)
-            if [ "$COUNT" -gt 0 ]; then
-              echo "---"
-              echo ""
-              echo "### Findings ($COUNT)"
-              echo ""
-              echo "| Severity | File | Issue |"
-              echo "|----------|------|-------|"
-              jq -r '.[] | "| \(.severity) | `\(.file)` | \(.comment | gsub("\n"; " ") | .[0:120]) |"' \
-                /tmp/inline-comments.json
-              echo ""
-              echo "_Inline comments are posted directly on the diff._"
-            elif [ "${MODE}" = "light" ]; then
-              echo ""
-              echo "_Light review — run \`/gemini-review\` for a deep review with inline comments._"
-            elif [[ "$PHASE2" == skipped:* ]]; then
-              echo "---"
-              echo ""
-              SKIP_REASON="${PHASE2#skipped:}"
-              if [ "$SKIP_REASON" = "summary_only" ]; then
-                echo "_Inline review skipped: PR is large (${FILES} files, ${LINES} lines). Summary only._"
-              elif [ "$SKIP_REASON" = "curl_fetch_failed" ]; then
-                echo "> **Warning:** Inline review could not run — the review script failed to download. Summary review above is still valid."
-              elif [ "$SKIP_REASON" = "script_empty" ]; then
-                echo "> **Warning:** Inline review could not run — the review script was empty. Summary review above is still valid."
-              else
-                echo "> **Warning:** Inline review was skipped ($SKIP_REASON). Summary review above is still valid."
-              fi
-            elif [[ "$PHASE2" == failed:* ]]; then
-              echo "---"
-              echo ""
-              echo "> **Warning:** Inline review failed (${PHASE2#failed:}). Summary review above is still valid."
-            else
-              echo "---"
-              echo ""
-              echo "No significant issues found by Gemini Pro inline review."
-            fi
-          } > /tmp/review-body.md
-
-          # Find an existing Gemini review comment posted by github-actions[bot] and edit it;
-          # fall back to creating a new comment if none exists yet.
-          EXISTING_ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
-            --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("## Gemini Code Review"))] | last | .id // empty' \
-            2>/dev/null || true)
-
-          if [ -n "$EXISTING_ID" ]; then
-            gh api \
-              --method PATCH \
-              -H "Accept: application/vnd.github+json" \
-              "/repos/$REPO/issues/comments/$EXISTING_ID" \
-              --field body="$(cat /tmp/review-body.md)"
-          else
-            gh pr comment "$PR_NUMBER" \
-              --repo "$REPO" \
-              --body-file /tmp/review-body.md
-          fi
-
-          # --- Phase 4: Post inline review comments (if any) ---
-          if [ "$COUNT" -gt 0 ]; then
-            echo "Posting $COUNT inline comment(s) via GitHub Reviews API..."
-
-            # Map each finding to a review comment using line + side instead of position,
-            # so comments land on the correct line rather than always at position 1.
-            COMMENTS=$(jq --arg footer "$INLINE_ATTRIBUTION" '[.[] | {
-              path: .file,
-              line: .line,
-              side: "RIGHT",
-              body: (
-                "**[\(.severity)]** \(.comment)" +
-                (if (.suggestion != null and .suggestion != "") then
-                  "\n\n```suggestion\n\(.suggestion)\n```"
-                else "" end) +
-                $footer
-              )
-            }]' /tmp/inline-comments.json)
-
-            jq -n \
-              --arg commit_id "$HEAD_SHA" \
-              --arg body "" \
-              --arg event "COMMENT" \
-              --argjson comments "$COMMENTS" \
-              '{commit_id: $commit_id, body: $body, event: $event, comments: $comments}' \
-            | gh api \
-              --method POST \
-              -H "Accept: application/vnd.github+json" \
-              "/repos/$REPO/pulls/$PR_NUMBER/reviews" \
-              --input -
-          fi
-
-          # --- Phase 5: Apply labels ---
-          CRITICAL=$(jq '[.[] | select(.severity == "Critical")] | length' /tmp/inline-comments.json)
-          HIGH=$(jq '[.[] | select(.severity == "High")] | length' /tmp/inline-comments.json)
-
-          gh label create "ai-reviewed" --color "0075ca" --description "Reviewed by AI" \
-            --repo "$REPO" 2>/dev/null || true
-          gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "ai-reviewed" 2>/dev/null || true
-
-          if [ "$CRITICAL" -gt 0 ]; then
-            gh label create "severity:critical" --color "d73a4a" --description "Critical severity finding" \
-              --repo "$REPO" 2>/dev/null || true
-            gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "severity:critical" 2>/dev/null || true
-          elif [ "$HIGH" -gt 0 ]; then
-            gh label create "severity:high" --color "e4e669" --description "High severity finding" \
-              --repo "$REPO" 2>/dev/null || true
-            gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "severity:high" 2>/dev/null || true
-          fi
-
-          # --- Propagate Phase 2 failure ---
-          # All phases above (summary comment, inline comments, labels) have completed.
-          # Now fail the step so the "Post failure notice" fires and the job shows as failed.
-          PHASE2_STATUS=$(jq -r '.phase2_inline' /tmp/review-status.json)
-          if [[ "$PHASE2_STATUS" == failed:* ]]; then
-            echo "::error::Phase 2 inline review failed ($PHASE2_STATUS). Summary was still posted."
-            exit 1
-          fi
-
-      - name: Upload inline comments artifact
+      - name: Upload review artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: inline-comments-oss-${{ github.event.issue.number }}
-          path: /tmp/inline-comments.json
+          name: gemini-review-oss-${{ github.event.issue.number }}
+          path: |
+            /tmp/inline-comments.json
+            /tmp/review-metrics.json
           if-no-files-found: ignore
           retention-days: 7
 
@@ -815,12 +245,8 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
-          # Skip if review succeeded
-          if [ "$REVIEW_OUTCOME" = "success" ]; then
-            exit 0
-          fi
+          if [ "$REVIEW_OUTCOME" = "success" ]; then exit 0; fi
 
-          # Determine failure reason
           if [ "$JOB_STATUS" = "cancelled" ]; then
             REASON="cancelled (likely superseded by a newer push or manual cancellation)"
           elif [ -z "$REVIEW_OUTCOME" ] || [ "$REVIEW_OUTCOME" = "skipped" ]; then
@@ -829,13 +255,9 @@ jobs:
             REASON="failed (API error, timeout, or internal error)"
           fi
 
-          if [[ "$COMMENT_BODY" == /gemini-light-review* ]]; then
-            RETRIGGER="/gemini-light-review"
-          elif [[ "$COMMENT_BODY" == /gemini-deep-review* ]]; then
-            RETRIGGER="/gemini-deep-review"
-          else
-            RETRIGGER="/gemini-review"
-          fi
+          if [[ "$COMMENT_BODY" == /gemini-light-review* ]]; then RETRIGGER="/gemini-light-review"
+          elif [[ "$COMMENT_BODY" == /gemini-deep-review* ]]; then RETRIGGER="/gemini-deep-review"
+          else RETRIGGER="/gemini-review"; fi
 
           cat > /tmp/failure-notice.md <<EOF
           > **Note:** The automated Gemini code review did not complete — $REASON.
