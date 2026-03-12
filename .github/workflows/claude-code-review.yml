@@ -97,6 +97,7 @@ jobs:
           ref: ${{ steps.pr.outputs.number != '' && format('refs/pull/{0}/head', steps.pr.outputs.number) || github.ref }}
 
       - name: Post review-started notice
+        if: github.event_name != 'pull_request' || github.event.action == 'review_requested'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
