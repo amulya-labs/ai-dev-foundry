@@ -331,7 +331,7 @@ fi
     echo "_Inline comments are posted directly on the diff._"
   elif [ "${MODE}" = "light" ]; then
     echo ""
-    echo "_No significant issues found. Run \`/gemini-review\` for a deeper analysis._"
+    echo "_No significant issues found. Run \`/gemini-deep-review\` for a deeper analysis._"
   elif [[ "$PHASE2" == skipped:* ]]; then
     echo "---"
     echo ""
