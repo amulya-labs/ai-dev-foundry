@@ -1,0 +1,18 @@
+# Gemini context cache manifest — controls which files are included in the
+# cached corpus sent to Gemini Pro for code review context.
+#
+# Source: https://github.com/amulya-labs/ai-dev-foundry
+# License: MIT (https://opensource.org/licenses/MIT)
+#
+# If this file is absent, gemini_review.py falls back to: *.md, docs/**/*.md
+# Patterns use Python pathlib.glob() syntax (supports ** for recursive match).
+
+include:
+  # High-value context files listed first (order determines position in cache corpus)
+  - "docs/adr/**/*.md"
+  - "docs/architecture/**/*.md"
+  - "ARCHITECTURE.md"
+  - "STYLE_GUIDE.md"
+  - "CONTRIBUTING.md"
+  - "README.md"
+  - "docs/contracts/**/*"

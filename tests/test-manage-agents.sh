@@ -61,6 +61,18 @@ else
     assert ".github/workflows/scripts/gemini_review.py exists" "fail" "File not found"
 fi
 
+if [[ -f "$REPO_ROOT/.github/workflows/scripts/gemini_review_workflow.sh" ]]; then
+    assert ".github/workflows/scripts/gemini_review_workflow.sh exists" "pass"
+else
+    assert ".github/workflows/scripts/gemini_review_workflow.sh exists" "fail" "File not found"
+fi
+
+if [[ -f "$REPO_ROOT/.github/gemini-cache-manifest.yml" ]]; then
+    assert ".github/gemini-cache-manifest.yml exists" "pass"
+else
+    assert ".github/gemini-cache-manifest.yml exists" "fail" "File not found"
+fi
+
 # gha-workflow-templates/ should no longer exist
 if [[ ! -d "$REPO_ROOT/gha-workflow-templates" ]]; then
     assert "gha-workflow-templates/ directory removed" "pass"
@@ -272,6 +284,27 @@ if grep -q 'gemini_review.py' "$MANAGE_SCRIPT"; then
 else
     assert "Script references gemini_review.py" "fail" \
         "Expected gemini_review.py download in manage-ai-configs.sh"
+fi
+
+if grep -q 'gemini_review_workflow.sh' "$MANAGE_SCRIPT"; then
+    assert "Script references gemini_review_workflow.sh" "pass"
+else
+    assert "Script references gemini_review_workflow.sh" "fail" \
+        "Expected gemini_review_workflow.sh in PROVIDER_GEMINI_WORKFLOW_SCRIPTS"
+fi
+
+if grep -q 'PROVIDER_GEMINI_EXTRA_FILES=' "$MANAGE_SCRIPT"; then
+    assert "PROVIDER_GEMINI_EXTRA_FILES is defined" "pass"
+else
+    assert "PROVIDER_GEMINI_EXTRA_FILES is defined" "fail" \
+        "Expected PROVIDER_GEMINI_EXTRA_FILES= in script (cache manifest)"
+fi
+
+if grep -q 'gemini-cache-manifest.yml' "$MANAGE_SCRIPT"; then
+    assert "Script references gemini-cache-manifest.yml" "pass"
+else
+    assert "Script references gemini-cache-manifest.yml" "fail" \
+        "Expected gemini-cache-manifest.yml in PROVIDER_GEMINI_EXTRA_FILES"
 fi
 
 echo
