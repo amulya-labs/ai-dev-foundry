@@ -52,6 +52,12 @@ RETRY_BASE_DELAY_SECONDS = 2  # doubles each attempt: 2s, 4s, 8s
 # HTTP status codes that warrant a retry
 RETRYABLE_EXCEPTION_SUBSTRINGS = ("429", "500", "502", "503", "504", "quota", "rate")
 
+# Thinking model token budgets: max_output_tokens covers BOTH thinking and
+# text output for Gemini 2.5 models. We set 16384 total with 8192 for
+# thinking, leaving 8192+ for the JSON response (~10 findings).
+REVIEW_MAX_OUTPUT_TOKENS = 16_384
+REVIEW_THINKING_BUDGET = 8_192
+
 # File extensions / name patterns to skip when building the cache corpus.
 # Covers lock files, build artifacts, compiled assets, AND common secret/credential files.
 SKIP_PATTERNS = re.compile(
@@ -235,13 +241,15 @@ def extract_response_text(response) -> str:
 
     # Fallback: iterate parts and skip thought parts
     try:
-        content = response.candidates[0].content
+        candidate = response.candidates[0]
+        finish_reason = getattr(candidate, "finish_reason", None)
+        content = candidate.content
         if content is None:
-            log("WARNING: response.candidates[0].content is None")
+            log(f"WARNING: response content is None (finish_reason={finish_reason})")
             return ""
         parts = content.parts
         if parts is None:
-            log("WARNING: response.candidates[0].content.parts is None")
+            log(f"WARNING: response content.parts is None (finish_reason={finish_reason})")
             return ""
         text_parts = [p.text for p in parts if not getattr(p, "thought", False) and p.text]
         if text_parts:
@@ -386,7 +394,10 @@ def run_review_direct(client, model: str, prompt: str) -> list:
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.1,
-                max_output_tokens=4096,
+                max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
+                thinking_config=types.ThinkingConfig(
+                    thinking_budget=REVIEW_THINKING_BUDGET,
+                ),
             ),
         )
 
@@ -414,8 +425,11 @@ def run_review_with_cache(client, model: str, cache_name: str, diff: str) -> lis
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.1,
-                max_output_tokens=4096,
+                max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
                 cached_content=cache_name,
+                thinking_config=types.ThinkingConfig(
+                    thinking_budget=REVIEW_THINKING_BUDGET,
+                ),
             ),
         )
 
