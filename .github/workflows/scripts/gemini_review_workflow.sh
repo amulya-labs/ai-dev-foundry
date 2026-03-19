@@ -13,7 +13,7 @@
 #   REPO               Repository (owner/repo)
 #   RUN_URL            URL to the workflow run
 #   SELECTED_MODEL     Gemini model name (e.g. gemini-2.5-flash)
-#   MODE               "light" or "deep"
+#   MODE               "light", "deep", or "pro"
 #   USE_CACHE          "0" or "1"
 #   WORKFLOW_VERSION   Workflow version (usually commit SHA)
 #   INLINE_ATTRIBUTION Attribution footer for inline comments
@@ -109,11 +109,19 @@ update_status() { # $1=key, $2=value
 
 FLASH_MODEL="gemini-2.5-flash"
 
+# Liberal output token budget for Phase 1 summary.
+# Cost is negligible (~$0.002 at Flash pricing). 4096 tokens (~3000 words)
+# provides ample headroom for any PR size in any mode.
+SUMMARY_MAX_TOKENS=4096
+
 # ---------------------------------------------------------------------------
 # Post review-started notice (non-fatal)
 # ---------------------------------------------------------------------------
 
-if [[ "${COMMENT_BODY}" == /gemini-deep-review* ]]; then
+if [[ "${COMMENT_BODY}" == /gemini-pro-review* ]]; then
+  REVIEW_LABEL="Pro"
+  TRIGGER_CMD="/gemini-pro-review"
+elif [[ "${COMMENT_BODY}" == /gemini-deep-review* ]]; then
   REVIEW_LABEL="Deep"
   TRIGGER_CMD="/gemini-deep-review"
 elif [[ "${COMMENT_BODY}" == /gemini-light-review* ]]; then
@@ -203,23 +211,44 @@ else
     >> /tmp/summary-prompt.txt
 fi
 
-jq -n --rawfile prompt /tmp/summary-prompt.txt '{
+jq -n --rawfile prompt /tmp/summary-prompt.txt --argjson max_tokens "$SUMMARY_MAX_TOKENS" '{
   contents: [{parts: [{text: $prompt}]}],
-  generationConfig: {temperature: 0.3, maxOutputTokens: 512}
+  generationConfig: {temperature: 0.3, maxOutputTokens: $max_tokens}
 }' > /tmp/gemini-flash-payload.json
 
-FLASH_RESPONSE=$(gemini_api_call \
+FLASH_RESPONSE=""
+if ! FLASH_RESPONSE=$(gemini_api_call \
   "https://generativelanguage.googleapis.com/v1beta/models/${FLASH_MODEL}:generateContent?key=${GEMINI_API_KEY}" \
-  "/tmp/gemini-flash-payload.json") || true
+  "/tmp/gemini-flash-payload.json"); then
+  echo "ERROR: Gemini Flash API call failed after retries" >&2
+  update_status phase1_summary "failed:api_error"
+  exit 1
+fi
 
 SUMMARY_TEXT=$(echo "$FLASH_RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null)
 if [ -z "$SUMMARY_TEXT" ]; then
   FLASH_ERROR=$(echo "$FLASH_RESPONSE" | jq -r '.error | "[\(.code)] \(.message)" // "unknown error"' 2>/dev/null)
-  echo "ERROR: Gemini Flash API call failed: $FLASH_ERROR" >&2
+  echo "ERROR: Gemini Flash returned no summary text: $FLASH_ERROR" >&2
   update_status phase1_summary "failed:$FLASH_ERROR"
   exit 1
 fi
-update_status phase1_summary "success"
+
+# Check finishReason — if MAX_TOKENS, the summary was truncated
+FINISH_REASON=$(echo "$FLASH_RESPONSE" | jq -r '.candidates[0].finishReason // "UNKNOWN"' 2>/dev/null)
+if [ "$FINISH_REASON" = "MAX_TOKENS" ]; then
+  echo "WARNING: Phase 1 summary was truncated (finishReason=MAX_TOKENS, budget=${SUMMARY_MAX_TOKENS})" >&2
+  if [ "${MODE}" = "light" ]; then
+    TRUNCATION_HINT="Run \`/gemini-deep-review\` for a complete analysis."
+  else
+    TRUNCATION_HINT="The response hit the ${SUMMARY_MAX_TOKENS}-token output limit."
+  fi
+  SUMMARY_TEXT="${SUMMARY_TEXT}
+
+> **Note:** This summary was truncated due to response length limits. ${TRUNCATION_HINT}"
+  update_status phase1_summary "truncated"
+else
+  update_status phase1_summary "success"
+fi
 
 PHASE1_END=$(date +%s)
 PHASE1_LATENCY=$((PHASE1_END - PHASE1_START))
@@ -286,14 +315,16 @@ COUNT=$(jq 'length' /tmp/inline-comments.json)
 # Build summary comment
 # ---------------------------------------------------------------------------
 
-if [ "${MODE}" = "deep" ]; then
+if [ "${MODE}" = "pro" ]; then
+  RETRIGGER="/gemini-pro-review"
+elif [ "${MODE}" = "deep" ]; then
   RETRIGGER="/gemini-deep-review"
 else
   RETRIGGER="/gemini-review"
 fi
 
 {
-  echo "## Gemini Code Review"
+  echo "## 💎 Gemini Code Review"
   echo ""
   echo "_Automated review by [Gemini](https://gemini.google.com/) via [ai-dev-foundry](https://github.com/amulya-labs/ai-dev-foundry) (${WORKFLOW_VERSION:0:7}). Re-trigger with \`$RETRIGGER\`._"
   echo ""
@@ -366,7 +397,7 @@ fi
 # ---------------------------------------------------------------------------
 
 EXISTING_ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
-  --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("## Gemini Code Review"))] | last | .id // empty' \
+  --jq '[.[] | select(.user.login == "github-actions[bot]") | select((.body | startswith("## 💎 Gemini Code Review")) or (.body | startswith("## Gemini Code Review")))] | last | .id // empty' \
   2>/dev/null || true)
 
 if [ -n "$EXISTING_ID" ]; then
