@@ -13,7 +13,7 @@
 #   REPO               Repository (owner/repo)
 #   RUN_URL            URL to the workflow run
 #   SELECTED_MODEL     Gemini model name (e.g. gemini-2.5-flash)
-#   MODE               "light" or "deep"
+#   MODE               "light", "deep", or "pro"
 #   USE_CACHE          "0" or "1"
 #   WORKFLOW_VERSION   Workflow version (usually commit SHA)
 #   INLINE_ATTRIBUTION Attribution footer for inline comments
@@ -237,9 +237,14 @@ fi
 FINISH_REASON=$(echo "$FLASH_RESPONSE" | jq -r '.candidates[0].finishReason // "UNKNOWN"' 2>/dev/null)
 if [ "$FINISH_REASON" = "MAX_TOKENS" ]; then
   echo "WARNING: Phase 1 summary was truncated (finishReason=MAX_TOKENS, budget=${SUMMARY_MAX_TOKENS})" >&2
+  if [ "${MODE}" = "light" ]; then
+    TRUNCATION_HINT="Run \`/gemini-deep-review\` for a complete analysis."
+  else
+    TRUNCATION_HINT="The response hit the ${SUMMARY_MAX_TOKENS}-token output limit."
+  fi
   SUMMARY_TEXT="${SUMMARY_TEXT}
 
-> **Note:** This summary was truncated due to response length limits. Run \`/gemini-deep-review\` for a complete analysis."
+> **Note:** This summary was truncated due to response length limits. ${TRUNCATION_HINT}"
   update_status phase1_summary "truncated"
 else
   update_status phase1_summary "success"

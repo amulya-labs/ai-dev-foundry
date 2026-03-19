@@ -17,6 +17,8 @@ Environment variables:
   OUTPUT_FILE      Default: /tmp/inline-comments.json. Where to write results.
   METRICS_FILE     Default: /tmp/review-metrics-phase2.json. Token usage output.
   CACHE_MANIFEST_PATH  Default: .github/gemini-cache-manifest.yml. Cache target config.
+  MODE             Default: light. Review mode ("light", "deep", or "pro").
+                   Controls thinking budget: light disables thinking, deep/pro enable it.
 """
 
 import json
