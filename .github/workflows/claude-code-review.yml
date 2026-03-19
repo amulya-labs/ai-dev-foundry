@@ -175,7 +175,7 @@ jobs:
             **Summary comment** — write to `/tmp/review.md` then run `gh pr comment ${{ steps.pr.outputs.number }} --body-file /tmp/review.md`:
             - Format:
               ```
-              ## Code Review Summary
+              ## 🤖 Code Review Summary
 
               ### Key Findings
               [Critical/Major items — reference inline comments where posted]
@@ -235,7 +235,7 @@ jobs:
 
           # Build comment body
           cat > /tmp/failure-notice.md <<EOF
-          > **Note:** The automated Claude code review did not complete — $REASON.
+          > 🤖 **Note:** The automated Claude code review did not complete — $REASON.
           >
           > Any inline comments posted above are valid findings, but the review may be incomplete.
           > [View workflow run]($RUN_URL) for details. Re-trigger with \`/claude-review\`.
@@ -361,7 +361,7 @@ jobs:
             **Summary comment** — write to `/tmp/review.md` then run `gh pr comment ${{ steps.pr.outputs.number }} --repo ${{ github.repository }} --body-file /tmp/review.md`:
             - Format:
               ```
-              ## Code Review Summary
+              ## 🤖 Code Review Summary
 
               ### Key Findings
               [Critical/Major items — reference inline comments where posted]
@@ -407,7 +407,7 @@ jobs:
 
           # Build comment body
           cat > /tmp/failure-notice.md <<EOF
-          > **Note:** The automated Claude code review did not complete — $REASON.
+          > 🤖 **Note:** The automated Claude code review did not complete — $REASON.
           >
           > Any inline comments posted above are valid findings, but the review may be incomplete.
           > [View workflow run]($RUN_URL) for details. Re-trigger with \`/claude-review\`.

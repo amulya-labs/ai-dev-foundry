@@ -5,7 +5,7 @@ name: Gemini Code Review
 
 env:
   WORKFLOW_VERSION: ${{ github.sha }}
-  INLINE_ATTRIBUTION: "\n\n---\n_\U0001f916 [Gemini](https://gemini.google.com/) via [ai-dev-foundry](https://github.com/amulya-labs/ai-dev-foundry)_"
+  INLINE_ATTRIBUTION: "\n\n---\n_\U0001f48e [Gemini](https://gemini.google.com/) via [ai-dev-foundry](https://github.com/amulya-labs/ai-dev-foundry)_"
 
 on:
   issue_comment:
@@ -137,7 +137,7 @@ jobs:
           else RETRIGGER="/gemini-review"; fi
 
           cat > /tmp/failure-notice.md <<EOF
-          > **Note:** The automated Gemini code review did not complete — $REASON.
+          > 💎 **Note:** The automated Gemini code review did not complete — $REASON.
           >
           > Any inline comments posted above are valid findings, but the review may be incomplete.
           > [View workflow run]($RUN_URL) for details. Re-trigger with \`$RETRIGGER\`.
@@ -260,7 +260,7 @@ jobs:
           else RETRIGGER="/gemini-review"; fi
 
           cat > /tmp/failure-notice.md <<EOF
-          > **Note:** The automated Gemini code review did not complete — $REASON.
+          > 💎 **Note:** The automated Gemini code review did not complete — $REASON.
           >
           > Any inline comments posted above are valid findings, but the review may be incomplete.
           > [View workflow run]($RUN_URL) for details. Re-trigger with \`$RETRIGGER\`.

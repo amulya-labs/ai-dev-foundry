@@ -109,6 +109,16 @@ update_status() { # $1=key, $2=value
 
 FLASH_MODEL="gemini-2.5-flash"
 
+# Mode-aware output token budget for Phase 1 summary.
+# Light mode asks for ~100 words (fits in 512 tokens). Deep mode asks for
+# ~200 words across 3 paragraphs, which routinely needs 600-800 tokens for
+# large PRs. 2048 gives ample headroom without being wasteful.
+if [ "${MODE}" = "deep" ]; then
+  SUMMARY_MAX_TOKENS=2048
+else
+  SUMMARY_MAX_TOKENS=512
+fi
+
 # ---------------------------------------------------------------------------
 # Post review-started notice (non-fatal)
 # ---------------------------------------------------------------------------
@@ -203,23 +213,39 @@ else
     >> /tmp/summary-prompt.txt
 fi
 
-jq -n --rawfile prompt /tmp/summary-prompt.txt '{
+jq -n --rawfile prompt /tmp/summary-prompt.txt --argjson max_tokens "$SUMMARY_MAX_TOKENS" '{
   contents: [{parts: [{text: $prompt}]}],
-  generationConfig: {temperature: 0.3, maxOutputTokens: 512}
+  generationConfig: {temperature: 0.3, maxOutputTokens: $max_tokens}
 }' > /tmp/gemini-flash-payload.json
 
-FLASH_RESPONSE=$(gemini_api_call \
+FLASH_RESPONSE=""
+if ! FLASH_RESPONSE=$(gemini_api_call \
   "https://generativelanguage.googleapis.com/v1beta/models/${FLASH_MODEL}:generateContent?key=${GEMINI_API_KEY}" \
-  "/tmp/gemini-flash-payload.json") || true
+  "/tmp/gemini-flash-payload.json"); then
+  echo "ERROR: Gemini Flash API call failed after retries" >&2
+  update_status phase1_summary "failed:api_error"
+  exit 1
+fi
 
 SUMMARY_TEXT=$(echo "$FLASH_RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null)
 if [ -z "$SUMMARY_TEXT" ]; then
   FLASH_ERROR=$(echo "$FLASH_RESPONSE" | jq -r '.error | "[\(.code)] \(.message)" // "unknown error"' 2>/dev/null)
-  echo "ERROR: Gemini Flash API call failed: $FLASH_ERROR" >&2
+  echo "ERROR: Gemini Flash returned no summary text: $FLASH_ERROR" >&2
   update_status phase1_summary "failed:$FLASH_ERROR"
   exit 1
 fi
-update_status phase1_summary "success"
+
+# Check finishReason — if MAX_TOKENS, the summary was truncated
+FINISH_REASON=$(echo "$FLASH_RESPONSE" | jq -r '.candidates[0].finishReason // "UNKNOWN"' 2>/dev/null)
+if [ "$FINISH_REASON" = "MAX_TOKENS" ]; then
+  echo "WARNING: Phase 1 summary was truncated (finishReason=MAX_TOKENS, budget=${SUMMARY_MAX_TOKENS})" >&2
+  SUMMARY_TEXT="${SUMMARY_TEXT}
+
+> **Note:** This summary was truncated due to response length limits. Run \`/gemini-deep-review\` for a complete analysis."
+  update_status phase1_summary "truncated"
+else
+  update_status phase1_summary "success"
+fi
 
 PHASE1_END=$(date +%s)
 PHASE1_LATENCY=$((PHASE1_END - PHASE1_START))
@@ -293,7 +319,7 @@ else
 fi
 
 {
-  echo "## Gemini Code Review"
+  echo "## 💎 Gemini Code Review"
   echo ""
   echo "_Automated review by [Gemini](https://gemini.google.com/) via [ai-dev-foundry](https://github.com/amulya-labs/ai-dev-foundry) (${WORKFLOW_VERSION:0:7}). Re-trigger with \`$RETRIGGER\`._"
   echo ""
@@ -366,7 +392,7 @@ fi
 # ---------------------------------------------------------------------------
 
 EXISTING_ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
-  --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("## Gemini Code Review"))] | last | .id // empty' \
+  --jq '[.[] | select(.user.login == "github-actions[bot]") | select((.body | startswith("## 💎 Gemini Code Review")) or (.body | startswith("## Gemini Code Review")))] | last | .id // empty' \
   2>/dev/null || true)
 
 if [ -n "$EXISTING_ID" ]; then
