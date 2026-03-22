@@ -328,6 +328,15 @@ install_config() {
         if [[ -v "$_cdir_var" ]]; then
             git add "${!_cdir_var}" 2>/dev/null || true
         fi
+        # Stage extra files (e.g. .github/gemini-cache-manifest.yml, .github/repomix.config.json)
+        local _extra_var="PROVIDER_${_up}_EXTRA_FILES"
+        if [[ -v "$_extra_var" ]] && [[ -n "${!_extra_var}" ]]; then
+            local -a _extra_list
+            read -ra _extra_list <<< "${!_extra_var}"
+            for _ef in "${_extra_list[@]}"; do
+                git add "$_ef" 2>/dev/null || true
+            done
+        fi
     done
     git add .github/workflows/ 2>/dev/null || true
 
@@ -378,6 +387,15 @@ update_config() {
         _cdir_var="PROVIDER_${_up}_CONFIG_DIR"
         if [[ -v "$_cdir_var" ]]; then
             git add "${!_cdir_var}" 2>/dev/null || true
+        fi
+        # Stage extra files (e.g. .github/gemini-cache-manifest.yml, .github/repomix.config.json)
+        local _extra_var="PROVIDER_${_up}_EXTRA_FILES"
+        if [[ -v "$_extra_var" ]] && [[ -n "${!_extra_var}" ]]; then
+            local -a _extra_list
+            read -ra _extra_list <<< "${!_extra_var}"
+            for _ef in "${_extra_list[@]}"; do
+                git add "$_ef" 2>/dev/null || true
+            done
         fi
     done
     git add .github/workflows/ 2>/dev/null || true
