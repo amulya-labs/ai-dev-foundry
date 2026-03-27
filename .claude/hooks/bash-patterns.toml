@@ -315,6 +315,9 @@ patterns = [
     "gcloud .* create(\\s|$)",
     "az .* delete(\\s|$)",
     "az .* create(\\s|$)",
+    # Supabase mutations
+    "supabase .* (delete|reset|push|destroy)(\\s|$)",
+    "supabase (db push|db reset|projects delete|functions delete)(\\s|$)",
 ]
 
 [ask.process_control]
@@ -784,8 +787,8 @@ patterns = [
     # Desktop/display environment info
     "^gnome-extensions ",
     "^glxinfo",
-    "^gsettings",
-    "^dconf",
+    "^gsettings (get|list|describe|range|monitor|help)",
+    "^dconf (dump|read|list|watch|help)",
     "^update-desktop-database",
     "^prime-select query",
     "^findmnt",
@@ -824,8 +827,6 @@ description = "Get-Shit-Done (GSD) framework commands"
 patterns = [
     # GSD tools CLI (matched anywhere in segment after env-var stripping)
     "gsd-tools\\.cjs",
-    # GSD init output processing (cat of @file: results)
-    "^INIT=\\$\\(",
 ]
 
 [allow.command_wrappers]
@@ -1059,8 +1060,7 @@ patterns = [
     # Common script patterns
     "^\\./bin/",
     "^bin/",
-    # Shell interpreter + relative path (e.g. bash scripts/foo.sh)
-    "^(bash|sh|zsh) \\./",
+    # Shell interpreter + known safe directories (e.g. bash scripts/foo.sh)
     "^(bash|sh|zsh) tests/",
     "^(bash|sh|zsh) scripts/",
     "^(bash|sh|zsh) bin/",
@@ -1087,11 +1087,9 @@ patterns = [
     "^ansible ",
     "^vagrant",
     "^packer",
-    # Cloudflare
-    "^wrangler",
     # Supabase
     "^supabase",
-    # Firecrawl
+    # Firecrawl (read-only scraping/search CLI)
     "^firecrawl",
 ]
 
@@ -1223,10 +1221,10 @@ patterns = [
     "^ifconfig",
     "^nc ",
     "^whois",
-    "^ethtool",
-    "^nmcli",
-    "^tc ",
-    "^sysctl ",
+    "^ethtool [a-z]",
+    "^nmcli (connection|device|general|radio|monitor) (show|list|status|help)",
+    "^tc (qdisc|filter|class|route) (show|list|get) ",
+    "^sysctl [a-z]",
 ]
 
 [allow.docker]

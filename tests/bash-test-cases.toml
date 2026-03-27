@@ -1311,11 +1311,15 @@ description = "ethtool interface info"
 
 [[allow]]
 command = "nmcli connection show"
-description = "nmcli connection list"
+description = "nmcli connection show (read-only)"
+
+[[allow]]
+command = "nmcli device status"
+description = "nmcli device status (read-only)"
 
 [[allow]]
 command = "tc qdisc show dev enp8s0"
-description = "tc qdisc read-only"
+description = "tc qdisc show (read-only)"
 
 [[allow]]
 command = "sysctl net.ipv4.tcp_window_scaling"
@@ -1337,15 +1341,19 @@ description = "numfmt number formatting"
 # Desktop/display (new)
 [[allow]]
 command = "gsettings get org.gnome.desktop.interface color-scheme"
-description = "gsettings read"
+description = "gsettings get (read-only)"
 
 [[allow]]
-command = "gsettings set org.gnome.desktop.interface color-scheme 'default'"
-description = "gsettings write"
+command = "gsettings list-schemas"
+description = "gsettings list-schemas (read-only)"
 
 [[allow]]
 command = "dconf dump /org/gnome/shell/"
-description = "dconf dump"
+description = "dconf dump (read-only)"
+
+[[allow]]
+command = "dconf read /org/gnome/desktop/interface/color-scheme"
+description = "dconf read (read-only)"
 
 [[allow]]
 command = "update-desktop-database ~/.local/share/applications/"
@@ -1895,6 +1903,49 @@ description = "poetrun run k3s-helm upgrade"
 [[ask]]
 command = "poetrun run k3s-helm list"
 description = "poetrun run k3s-helm list (all poetrun k3s-helm commands prompt)"
+
+# Network/system write operations (restricted from allow to ask)
+[[ask]]
+command = "sysctl -w net.core.rmem_max=16777216"
+description = "sysctl write (kernel param modification)"
+
+[[ask]]
+command = "nmcli connection down myconn"
+description = "nmcli connection down (network disruption)"
+
+[[ask]]
+command = "nmcli connection delete myconn"
+description = "nmcli connection delete (destructive)"
+
+[[ask]]
+command = "tc qdisc add dev eth0 root netem delay 100ms"
+description = "tc qdisc add (traffic shaping modification)"
+
+[[ask]]
+command = "ethtool -s enp8s0 speed 100"
+description = "ethtool set (NIC modification)"
+
+# Desktop write operations (restricted from allow to ask)
+[[ask]]
+command = "gsettings set org.gnome.desktop.interface color-scheme 'default'"
+description = "gsettings set (desktop config modification)"
+
+[[ask]]
+command = "dconf write /org/gnome/desktop/interface/color-scheme \"'default'\""
+description = "dconf write (desktop config modification)"
+
+# Supabase destructive operations
+[[ask]]
+command = "supabase db push"
+description = "supabase db push (applies migrations)"
+
+[[ask]]
+command = "supabase db reset"
+description = "supabase db reset (destructive)"
+
+[[ask]]
+command = "supabase projects delete myproject"
+description = "supabase projects delete (destructive)"
 
 [[ask]]
 command = "terraform apply"
