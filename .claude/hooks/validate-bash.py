@@ -608,7 +608,7 @@ def _is_bare_redirect(segment: str) -> bool:
     and should be skipped.
     """
     # Strip all redirections: N>/dev/null, 2>&1, >/dev/null, N>>/path, etc.
-    s = re.sub(r'\d*>>?&?\d*/?[\w./-]*', '', segment)
+    s = re.sub(r'\d*>>?&?\d*\s*/?[\w./-]*', '', segment)
     # Strip pipe + safe tail commands (head, tail, sort, wc, tee, grep, etc.)
     s = re.sub(r'\|\s*(head|tail|sort|wc|uniq|tee|grep|sed|awk|cut|tr|column|less|more|cat|fmt|nl|rev|paste|comm|fold|expand|unexpand|pr)\b[^|]*', '', s)
     # Strip remaining pipes to nothing

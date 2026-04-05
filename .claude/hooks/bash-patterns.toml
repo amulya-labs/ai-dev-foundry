@@ -111,7 +111,7 @@ patterns = [
     # and safe merge forms (--ff-only, --abort, --no-edit, worktree- branches).
     # Destructive merge strategies (-X theirs/ours) always prompt even with origin/:
     # they silently discard local conflict resolutions, which is hard to undo.
-    "^git merge(?!-base\\b)(?!.* origin/)(?! --ff-only\\b)(?! --abort)(?! --no-edit\\b)(?! worktree-)",
+    "^git merge(?!-base\\b)(?!.* origin/)(?!\\s+--ff-only\\b)(?!\\s+--abort)(?!\\s+--no-edit\\b)(?!\\s+worktree-)",
     "^git merge.* -X (theirs|ours)",
     "^git merge.* --strategy-option[= ](theirs|ours)",
     "^git merge.* --squash",
@@ -1613,7 +1613,9 @@ description = "Running project executables from relative paths"
 patterns = [
     "^\\./[\\w.-]+",
     # Relative path executables (e.g. server/myapp, bin/tool)
-    "^[\\w.-]+/[\\w.-]+",
+    # First component must start with a word char (not . or -) to prevent
+    # path traversal like ../../bin/cmd from being auto-allowed.
+    "^[\\w][\\w.-]*/[\\w.-]+",
 ]
 
 [allow.find_readonly]

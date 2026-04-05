@@ -141,6 +141,8 @@ When both are configured, their decisions combine. The hook fires first, then se
 
 This is why `settings.json` ships with `Bash(*)` in the allow list. It delegates all Bash validation to the hook, which is the comprehensive security layer. Without `Bash(*)`, Claude Code's built-in permission system adds redundant prompts (e.g., "Compound command contains cd with output redirection") that the hook has already validated.
 
+**Fail-open behavior:** If the hook crashes or produces no output, the "Hook: no response" column applies. With `Bash(*)` in `settings.json`, this means commands are allowed without validation. This is an accepted tradeoff: `validate-bash.sh` has error handling that logs failures and exits non-zero (which Claude Code treats as a hook error, not "no response"). A true "no response" scenario requires the hook process to silently produce empty stdout and exit 0, which the current implementation guards against.
+
 ## Which Script Should I Use?
 
 | Use case | Recommended |

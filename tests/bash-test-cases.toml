@@ -1416,6 +1416,14 @@ description = "poetrun run wrapper"
 # =============================================================================
 
 [[ask]]
+command = "../../bin/dangerous-cmd"
+description = "path traversal via relative path should NOT be auto-allowed"
+
+[[ask]]
+command = "../some-tool --flag"
+description = "parent directory traversal should NOT be auto-allowed"
+
+[[ask]]
 command = "npm install && git push --force"
 description = "npm install + force push"
 
