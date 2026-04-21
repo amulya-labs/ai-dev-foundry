@@ -14,7 +14,8 @@ on:
 concurrency:
   group: ${{
     (github.event.issue.pull_request &&
-     (startsWith(github.event.comment.body, '/gemini-light-review') ||
+     (startsWith(github.event.comment.body, '/review') ||
+      startsWith(github.event.comment.body, '/gemini-light-review') ||
       startsWith(github.event.comment.body, '/gemini-deep-review') ||
       startsWith(github.event.comment.body, '/gemini-pro-review') ||
       startsWith(github.event.comment.body, '/gemini-review'))) &&
@@ -32,6 +33,7 @@ jobs:
     if: |
       github.event.issue.pull_request &&
       (
+        startsWith(github.event.comment.body, '/review') ||
         startsWith(github.event.comment.body, '/gemini-light-review') ||
         startsWith(github.event.comment.body, '/gemini-deep-review') ||
         startsWith(github.event.comment.body, '/gemini-pro-review') ||
@@ -208,6 +210,7 @@ jobs:
           if [[ "$COMMENT_BODY" == /gemini-pro-review* ]]; then RETRIGGER="/gemini-pro-review"
           elif [[ "$COMMENT_BODY" == /gemini-deep-review* ]]; then RETRIGGER="/gemini-deep-review"
           elif [[ "$COMMENT_BODY" == /gemini-light-review* ]]; then RETRIGGER="/gemini-light-review"
+          elif [[ "$COMMENT_BODY" == /review* ]]; then RETRIGGER="/review"
           else RETRIGGER="/gemini-review"; fi
 
           cat > /tmp/failure-notice.md <<EOF

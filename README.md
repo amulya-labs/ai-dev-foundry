@@ -164,8 +164,8 @@ Run `./scripts/manage-ai-configs.sh` or `git-subtree-mgr --help` for usage.
 
 | Workflow | Purpose | Trigger |
 |----------|---------|---------|
-| `claude-code-review.yml` | Automated PR review using Claude | PR opened/updated; `/claude-review` comment |
-| `gemini-code-review.yml` | Automated PR review using Gemini Flash + Pro | PR opened/updated; `/gemini-review` comment |
+| `claude-code-review.yml` | Automated PR review using Claude | PR opened/updated; `/review` or `/claude-review` comment |
+| `gemini-code-review.yml` | Automated PR review using Gemini Flash + Pro | `/review` or `/gemini-review` comment |
 | `sync-notebooklm.yml` | Flatten repo into text sources and sync to NotebookLM | Push to main; manual dispatch |
 
 ### Gemini Code Review Setup
@@ -174,7 +174,11 @@ Add your Gemini API key as a repository secret named `GEMINI_API_KEY`. The workf
 - **Gemini Flash** for the narrative PR summary (fast, quota-efficient)
 - **Gemini Pro** for line-level inline comments (deep reasoning)
 
-Trigger manually by commenting `/gemini-review` on any PR (members/owners/collaborators only).
+Trigger manually by commenting `/review` or `/gemini-review` on any PR (members/owners/collaborators only).
+
+### Shared Review Command Convention
+
+All `*-code-review.yml` workflows should opt in to the shared `/review` PR comment trigger alongside any agent-specific commands such as `/claude-review` or `/gemini-review`. This keeps the default review fan-out convention-based and avoids a separate dispatcher workflow.
 
 ### NotebookLM Sync
 
