@@ -12,13 +12,15 @@ set -e
 #   ./scripts/manage-ai-configs.sh claude install --with-gha-workflows   # Also install extra workflow templates
 #   ./scripts/manage-ai-configs.sh claude update                         # Pull latest config (includes Claude workflows)
 #   ./scripts/manage-ai-configs.sh claude update --with-gha-workflows    # Update including extra workflow templates
+#   ./scripts/manage-ai-configs.sh claude sync                           # Install if missing, update if present
 #
 # Multi-provider usage (comma-separated or individual flags):
 #   ./scripts/manage-ai-configs.sh claude install --gemini               # Claude + Gemini workflows
 #   ./scripts/manage-ai-configs.sh claude install --ai claude,gemini     # Same as above
 #   ./scripts/manage-ai-configs.sh claude update --ai gemini             # Update Gemini workflow only (no Claude .claude/ dir)
 #   ./scripts/manage-ai-configs.sh gemini install                        # Gemini workflows only
-#   ./scripts/manage-ai-configs.sh all install                           # All providers
+#   ./scripts/manage-ai-configs.sh all install                           # All providers (skips already-installed)
+#   ./scripts/manage-ai-configs.sh all sync                              # Converge — install missing + update installed
 
 REPO="amulya-labs/ai-dev-foundry"
 BRANCH="main"
@@ -636,9 +638,16 @@ update_config() {
         _kept+=("$_p")
     done
 
+    # Build the list of provider names that were skipped (strip the trailing
+    # diagnostic like "codex (.codex missing)" back to just "codex").
+    local -a _skipped_names=()
+    for _s in "${_skipped[@]}"; do
+        _skipped_names+=("${_s%% *}")
+    done
+
     if [[ ${#_skipped[@]} -gt 0 ]]; then
         for _s in "${_skipped[@]}"; do
-            warn "Skipping update for $_s — not installed; run 'install' to add it"
+            warn "Skipping update for $_s — not installed"
         done
     fi
     if [[ ${#_kept[@]} -eq 0 ]]; then
@@ -655,9 +664,67 @@ update_config() {
     info "Done! Config updated."
     print_provider_summary "updated"
     echo ""
+    if [[ ${#_skipped_names[@]} -gt 0 ]]; then
+        local _missing_csv
+        _missing_csv=$(IFS=,; echo "${_skipped_names[*]}")
+        warn "These providers are available but not installed: ${_skipped_names[*]}"
+        echo "  To install them now:"
+        echo "    $0 --ai ${_missing_csv} install"
+        echo "  Or converge everything in one command:"
+        echo "    $0 all sync"
+        echo ""
+    fi
     echo "Next steps:"
     echo "  git diff --cached  # review changes"
     echo "  git commit -m 'Update AI Dev Foundry config'"
+    echo "  git push"
+}
+
+# Install missing providers and update already-installed ones in a single pass.
+# `install` and `update` stay strict on mismatched state by design; `sync` is the
+# "just converge everything" verb for the common case of adding new providers to
+# a repo that already has some of them installed.
+sync_config() {
+    check_git
+
+    local _p _up _cdir_var _cdir
+    local -a _to_install=()
+    local -a _to_update=()
+    for _p in "${PROVIDERS_ENABLED[@]}"; do
+        _up=$(printf '%s' "$_p" | tr '[:lower:]' '[:upper:]')
+        _cdir_var="PROVIDER_${_up}_CONFIG_DIR"
+        if [[ -v "$_cdir_var" ]]; then
+            _cdir="${!_cdir_var}"
+            if [ -d "$_cdir" ] && [ "$(ls -A "$_cdir" 2>/dev/null)" ]; then
+                _to_update+=("$_p")
+            else
+                _to_install+=("$_p")
+            fi
+        else
+            # Workflow-only provider (e.g. notebooklm) — treat as update (idempotent download).
+            _to_update+=("$_p")
+        fi
+    done
+
+    if [[ ${#_to_install[@]} -gt 0 ]]; then
+        info "Will install: ${_to_install[*]}"
+    fi
+    if [[ ${#_to_update[@]} -gt 0 ]]; then
+        info "Will update:  ${_to_update[*]}"
+    fi
+
+    info "Syncing AI Dev Foundry config..."
+    echo ""
+    download_all
+    stage_downloaded_files
+
+    echo ""
+    info "Done! Config synced."
+    print_provider_summary "synced"
+    echo ""
+    echo "Next steps:"
+    echo "  git diff --cached  # review changes"
+    echo "  git commit -m 'Sync AI Dev Foundry config'"
     echo "  git push"
 }
 
@@ -668,6 +735,7 @@ usage_claude() {
     echo "Commands:"
     echo "  install   Add .claude config to your project (first-time setup)"
     echo "  update    Pull the latest config (agents, hooks, settings)"
+    echo "  sync      Install if missing, update if present (converge state)"
     echo ""
     echo "Options:"
     echo "  --gemini               Also install Gemini PR review workflow"
@@ -705,6 +773,7 @@ usage_gemini() {
     echo "Commands:"
     echo "  install   Add Gemini CLI hooks and workflow to your project (first-time setup)"
     echo "  update    Pull the latest Gemini CLI hooks and workflow"
+    echo "  sync      Install if missing, update if present (converge state)"
     echo ""
     echo "This downloads:"
     echo "  .gemini/hooks/                             - Gemini CLI hook adapters"
@@ -726,6 +795,7 @@ usage_codex() {
     echo "Commands:"
     echo "  install   Add Codex hooks to your project (first-time setup)"
     echo "  update    Pull the latest Codex hooks"
+    echo "  sync      Install if missing, update if present (converge state)"
     echo ""
     echo "This downloads:"
     echo "  .codex/hooks/                             - Codex hook adapters"
@@ -744,6 +814,7 @@ usage_notebooklm() {
     echo "Commands:"
     echo "  install   Add NotebookLM sync workflow to your project (first-time setup)"
     echo "  update    Pull the latest NotebookLM sync workflow"
+    echo "  sync      Install if missing, update if present (converge state)"
     echo ""
     echo "This downloads:"
     echo "  .github/workflows/sync-notebooklm.yml  - Automated NotebookLM sync on push to main"
@@ -762,10 +833,13 @@ usage_all() {
     echo "Usage: $0 all <command> [options]"
     echo ""
     echo "Commands:"
-    echo "  install   Install all provider configs and workflows"
-    echo "  update    Update all provider configs and workflows"
+    echo "  install   Install missing providers (skips already-installed ones)"
+    echo "  update    Update installed providers (skips missing ones)"
+    echo "  sync      Converge — install missing providers AND update installed ones"
     echo ""
-    echo "Equivalent to running install/update for every registered provider."
+    echo "Use 'sync' when you want the repo to match upstream without worrying"
+    echo "about per-provider state. Use 'install' or 'update' when you want"
+    echo "explicit, strict semantics."
     echo ""
     echo "Registered providers:"
     local _lvar _pname _plower
@@ -809,6 +883,7 @@ usage_main() {
     echo "Commands:"
     echo "  install   First-time setup — downloads config and workflows"
     echo "  update    Pull the latest config from ai-dev-foundry"
+    echo "  sync      Install missing + update installed (converge state)"
     echo ""
     echo "Global options:"
     echo "  --gemini               Also install Gemini workflows (with claude)"
@@ -910,19 +985,20 @@ handle_provider_command() {
     case "$command" in
         install) install_config ;;
         update)  update_config ;;
+        sync)    sync_config ;;
         *)       "$usage_func"; exit 1 ;;
     esac
 }
 
 case "$AGENT" in
     claude|gemini|codex|notebooklm)
-        if [[ "${1:-}" == "install" || "${1:-}" == "update" ]]; then
+        if [[ "${1:-}" == "install" || "${1:-}" == "update" || "${1:-}" == "sync" ]]; then
             check_script_version
         fi
         handle_provider_command "$AGENT" "${1:-}"
         ;;
     all)
-        if [[ "${1:-}" == "install" || "${1:-}" == "update" ]]; then
+        if [[ "${1:-}" == "install" || "${1:-}" == "update" || "${1:-}" == "sync" ]]; then
             check_script_version
         fi
         if [ ${#PROVIDERS_ENABLED[@]} -gt 0 ]; then
@@ -941,6 +1017,7 @@ case "$AGENT" in
         case "${1:-}" in
             install) install_config ;;
             update)  update_config ;;
+            sync)    sync_config ;;
             *)       usage_all; exit 1 ;;
         esac
         ;;

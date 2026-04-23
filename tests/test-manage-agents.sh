@@ -883,10 +883,41 @@ else
 fi
 
 # update should filter out providers not yet installed, not hard-error
-if grep -A25 '^update_config()' "$MANAGE_SCRIPT" | grep -q 'Skipping update for'; then
+if grep -A60 '^update_config()' "$MANAGE_SCRIPT" | grep -q 'Skipping update for'; then
     assert "update_config skips not-yet-installed providers with a warning" "pass"
 else
     assert "update_config skips not-yet-installed providers with a warning" "fail"
+fi
+
+# update should print a hint listing the install command for missing providers
+if grep -q 'available but not installed' "$MANAGE_SCRIPT"; then
+    assert "update_config hints the install command for missing providers" "pass"
+else
+    assert "update_config hints the install command for missing providers" "fail"
+fi
+
+echo
+
+# ── sync command ────────────────────────────────────────────────────
+
+echo "=== sync command ==="
+
+if grep -q '^sync_config()' "$MANAGE_SCRIPT"; then
+    assert "sync_config() function is defined" "pass"
+else
+    assert "sync_config() function is defined" "fail"
+fi
+
+if grep -q 'sync)    sync_config' "$MANAGE_SCRIPT"; then
+    assert "sync is wired into both single-provider and 'all' dispatch" "pass"
+else
+    assert "sync is wired into both single-provider and 'all' dispatch" "fail"
+fi
+
+if grep -q 'sync.*Install if missing, update if present' "$MANAGE_SCRIPT"; then
+    assert "per-provider usage text documents sync" "pass"
+else
+    assert "per-provider usage text documents sync" "fail"
 fi
 
 echo
