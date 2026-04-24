@@ -15,27 +15,33 @@ mkdir -p scripts && curl -fsSL -o scripts/manage-ai-configs.sh https://raw.githu
 
 See [Installation Options](#installation-options) below for git-subtree, manual-copy, and update flows.
 
-## Running with the hook as the primary gate (optional)
+## Skip approvals for safe commands (opt-in)
 
-By default, each AI tool has its own approval prompt layer **in front of** this repo's Bash hook. If the tool's prompt fires first, the shared `allow` list never gets a chance to suppress the prompt — you end up approving the same safe command (`git status`, `ls`, `npm test`) over and over.
+If you've clicked **approve** on `git status`, `ls`, or `npm test` a dozen times in one session, you're paying for two approval layers stacked on top of each other: your AI tool's, and this repo's hook. You can collapse them into one, so the hook's `allow` list does the silent gating and prompts are reserved for commands that actually warrant a human check.
 
-Once you're comfortable with the policy, you can collapse those two gates into one by starting the tool in a mode where the hook is the sole approval gate for Bash:
+How it works today: the tool's native prompt fires *first*, before the hook gets a turn — so `allow` patterns never get to suppress it. The modes below skip the tool's prompt layer and let the hook be the sole gate for Bash.
 
-| Tool | Invocation |
+| Tool | Start with |
 |------|------------|
-| Claude Code | `claude --dangerously-skip-permissions` |
-| Codex CLI | `codex --full-auto` (sandboxed) or `codex --dangerously-bypass-approvals-and-sandbox` |
-| Gemini CLI | `gemini --yolo` (or `-y`) |
+| **Claude Code** | `claude --dangerously-skip-permissions` |
+| **Codex CLI** | `codex --full-auto` *(sandboxed)* &nbsp;·&nbsp; `codex --dangerously-bypass-approvals-and-sandbox` *(no sandbox)* |
+| **Gemini CLI** | `gemini --yolo` (or `-y`) |
 
-In all three modes, the hook's **`[deny.*]` patterns still fire** — destructive commands (`rm -rf /`, force-pushes to `main`, `dd of=/dev/*`, etc.) remain blocked. `[ask.*]` patterns still prompt, and `[allow.*]` patterns still auto-approve silently.
+> **What stays in place.** The hook's `[deny.*]` patterns still fire in every mode above — destructive commands (`rm -rf /`, force-pushes to `main`, `dd of=/dev/*`, and similar) remain blocked. `[ask.*]` patterns still prompt; `[allow.*]` patterns still auto-approve silently. You're not disabling the policy, you're promoting it to the sole gate.
 
-**Scope note — what `[deny.*]` is, and isn't.** The deny list is a lean-liberal safety net, not a security boundary. It catches a known set of high-blast-radius commands; it does not attempt to sandbox untrusted input, prevent data exfiltration, or replace OS-level isolation. Use this mode only in environments you already trust (your own dev machine, disposable CI runners). Don't run it against code or prompts from untrusted sources.
+### What this isn't
 
-**Platform note.** The Windows / Git Bash pattern overlay (`bash-patterns.windows.toml`) is less battle-tested than the Linux and macOS overlays. On Windows, prefer the default prompt mode or review your recent hook logs before switching.
+- **Not safer.** Same policy, enforced once instead of twice. Fewer prompts is a UX win, not a security upgrade.
+- **Not a sandbox.** The hook blocks by pattern, not by capability. Use it on machines and repos you already trust — never on shared hosts or against code/prompts from untrusted sources.
+- **Not set-and-forget.** Skim the allow/deny lists in [`.ai-dev-foundry/shared/hooks/bash-policy/bash-patterns.toml`](.ai-dev-foundry/shared/hooks/bash-policy/bash-patterns.toml) once before flipping, and again after upgrading this repo.
 
-**opencode** is not listed above: it has no hook adapter in this repo yet (upstream hasn't exposed a comparable project hook surface), so YOLO mode on opencode means *no* gate, not "hook is the gate." Keep opencode on its default prompt settings until hook support lands.
+### When to stay on default prompts
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for per-tool nuances (Codex sandbox semantics, Claude `settings.json` × hook precedence, logging), and for how to extend the allow/ask/deny patterns.
+- **First-time users** who haven't seen what the policy covers.
+- **Windows / Git Bash** — the `bash-patterns.windows.toml` overlay is less battle-tested than Linux and macOS. Review your recent hook logs before switching on Windows.
+- **opencode users** — there's no hook adapter for opencode in this repo yet (upstream hasn't exposed a comparable project hook surface), so YOLO on opencode means *no* gate, not "hook is the gate." Keep opencode on its default prompt settings until hook support lands.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for per-tool nuances (Codex sandbox semantics, Claude `settings.json` × hook precedence, logging) and for how to extend the allow/ask/deny patterns.
 
 ## Agents
 
