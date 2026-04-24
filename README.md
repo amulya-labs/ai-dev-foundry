@@ -15,6 +15,28 @@ mkdir -p scripts && curl -fsSL -o scripts/manage-ai-configs.sh https://raw.githu
 
 See [Installation Options](#installation-options) below for git-subtree, manual-copy, and update flows.
 
+## Running with the hook as the primary gate (optional)
+
+By default, each AI tool has its own approval prompt layer **in front of** this repo's Bash hook. If the tool's prompt fires first, the shared `allow` list never gets a chance to suppress the prompt — you end up approving the same safe command (`git status`, `ls`, `npm test`) over and over.
+
+Once you're comfortable with the policy, you can collapse those two gates into one by starting the tool in a mode where the hook is the sole approval gate for Bash:
+
+| Tool | Invocation |
+|------|------------|
+| Claude Code | `claude --dangerously-skip-permissions` |
+| Codex CLI | `codex --full-auto` (sandboxed) or `codex --dangerously-bypass-approvals-and-sandbox` |
+| Gemini CLI | `gemini --yolo` (or `-y`) |
+
+In all three modes, the hook's **`[deny.*]` patterns still fire** — destructive commands (`rm -rf /`, force-pushes to `main`, `dd of=/dev/*`, etc.) remain blocked. `[ask.*]` patterns still prompt, and `[allow.*]` patterns still auto-approve silently.
+
+**Scope note — what `[deny.*]` is, and isn't.** The deny list is a lean-liberal safety net, not a security boundary. It catches a known set of high-blast-radius commands; it does not attempt to sandbox untrusted input, prevent data exfiltration, or replace OS-level isolation. Use this mode only in environments you already trust (your own dev machine, disposable CI runners). Don't run it against code or prompts from untrusted sources.
+
+**Platform note.** The Windows / Git Bash pattern overlay (`bash-patterns.windows.toml`) is less battle-tested than the Linux and macOS overlays. On Windows, prefer the default prompt mode or review your recent hook logs before switching.
+
+**opencode** is not listed above: it has no hook adapter in this repo yet (upstream hasn't exposed a comparable project hook surface), so YOLO mode on opencode means *no* gate, not "hook is the gate." Keep opencode on its default prompt settings until hook support lands.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for per-tool nuances (Codex sandbox semantics, Claude `settings.json` × hook precedence, logging), and for how to extend the allow/ask/deny patterns.
+
 ## Agents
 
 See [docs/agents.md](docs/agents.md) for per-agent descriptions, domain grouping, and usage examples.
