@@ -97,6 +97,33 @@ PROVIDER_NOTEBOOKLM_EXTRA_FILES=".github/repomix.config.json"
 # Populated by flag parsing; positional agent arg also adds entries here
 PROVIDERS_ENABLED=()
 
+# Files that the installer used to own but has since relocated or dropped.
+# Older installs left these behind; install/update/sync warn when they exist,
+# and `prune` removes them. Add entries here as future migrations happen.
+# Each entry is a path relative to the repo root.
+KNOWN_STALE_FILES=(
+    # bash-policy engine moved from each provider's hooks/ dir into
+    # .ai-dev-foundry/shared/hooks/bash-policy/ (shared across providers).
+    ".claude/hooks/bash-patterns.toml"
+    ".claude/hooks/bash-patterns.linux.toml"
+    ".claude/hooks/bash-patterns.darwin.toml"
+    ".claude/hooks/bash-patterns.windows.toml"
+    ".claude/hooks/hook-lib.sh"
+    ".claude/hooks/validate-command.py"
+    ".gemini/hooks/bash-patterns.toml"
+    ".gemini/hooks/bash-patterns.linux.toml"
+    ".gemini/hooks/bash-patterns.darwin.toml"
+    ".gemini/hooks/bash-patterns.windows.toml"
+    ".gemini/hooks/hook-lib.sh"
+    ".gemini/hooks/validate-command.py"
+    ".codex/hooks/bash-patterns.toml"
+    ".codex/hooks/bash-patterns.linux.toml"
+    ".codex/hooks/bash-patterns.darwin.toml"
+    ".codex/hooks/bash-patterns.windows.toml"
+    ".codex/hooks/hook-lib.sh"
+    ".codex/hooks/validate-command.py"
+)
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -177,6 +204,82 @@ contains() {
     local item
     for item in "$@"; do [[ "$item" == "$needle" ]] && return 0; done
     return 1
+}
+
+# Print the list of KNOWN_STALE_FILES that currently exist in cwd (one per line).
+# Silent if none found.
+detect_stale_files() {
+    local f
+    for f in "${KNOWN_STALE_FILES[@]}"; do
+        if [[ -e "$f" ]]; then
+            echo "$f"
+        fi
+    done
+    return 0
+}
+
+# Called at the end of install/update/sync. If any known-stale files exist,
+# print a warning naming them and tell the user how to remove them.
+warn_if_stale_files() {
+    local stale
+    stale=$(detect_stale_files)
+    if [[ -z "$stale" ]]; then
+        return 0
+    fi
+    echo "" >&2
+    warn "Stale files from older installer layouts detected:"
+    while IFS= read -r f; do
+        echo "    $f" >&2
+    done <<< "$stale"
+    echo "  These were moved or removed upstream and are no longer used." >&2
+    echo "  Remove them with:" >&2
+    echo "    $0 prune" >&2
+    echo "" >&2
+}
+
+# Remove KNOWN_STALE_FILES that currently exist. Prompts for confirmation
+# unless AIDF_ASSUME_YES=1 or stdin is not a TTY (CI-friendly).
+prune_stale_files() {
+    check_git
+    local stale
+    stale=$(detect_stale_files)
+    if [[ -z "$stale" ]]; then
+        info "No stale files to prune."
+        return 0
+    fi
+
+    info "The following stale files will be removed:"
+    while IFS= read -r f; do
+        echo "    $f"
+    done <<< "$stale"
+    echo ""
+
+    if [[ -z "${AIDF_ASSUME_YES:-}" ]] && [[ -t 0 ]]; then
+        read -rp "Proceed? [y/N] " _reply
+        if [[ ! "$_reply" =~ ^[Yy]$ ]]; then
+            info "Aborted. No files removed."
+            return 0
+        fi
+    fi
+
+    local removed=0
+    while IFS= read -r f; do
+        if rm -f "$f"; then
+            info "  Removed $f"
+            ((++removed))
+        else
+            warn "  Failed to remove $f"
+        fi
+        # Clean up empty parent dir only if it's now empty (don't remove dirs
+        # that still hold other files).
+        local parent
+        parent=$(dirname "$f")
+        if [[ -d "$parent" ]] && [[ -z "$(ls -A "$parent" 2>/dev/null)" ]]; then
+            rmdir "$parent" 2>/dev/null || true
+        fi
+    done <<< "$stale"
+
+    info "Pruned $removed stale file(s). Review with 'git diff' and commit."
 }
 
 # Deduplicate PROVIDERS_ENABLED (preserve order, first occurrence wins)
@@ -610,7 +713,7 @@ install_config() {
     echo ""
     info "Done! Config installed."
     print_provider_summary "installed"
-    echo ""
+    warn_if_stale_files
     echo "Next steps:"
     echo "  git commit -m 'Add AI Dev Foundry config'"
     echo "  git push"
@@ -675,6 +778,7 @@ update_config() {
         echo "    $0 all sync"
         echo ""
     fi
+    warn_if_stale_files
     echo "Next steps:"
     echo "  git diff --cached  # review changes"
     echo "  git commit -m 'Update AI Dev Foundry config'"
@@ -722,7 +826,7 @@ sync_config() {
     echo ""
     info "Done! Config synced."
     print_provider_summary "synced"
-    echo ""
+    warn_if_stale_files
     echo "Next steps:"
     echo "  git diff --cached  # review changes"
     echo "  git commit -m 'Sync AI Dev Foundry config'"
@@ -737,6 +841,7 @@ usage_claude() {
     echo "  install   Add .claude config to your project (first-time setup)"
     echo "  update    Pull the latest config (agents, hooks, settings)"
     echo "  sync      Install if missing, update if present (converge state)"
+    echo "  prune     Remove stale files from older installer layouts"
     echo ""
     echo "Options:"
     echo "  --gemini               Also install Gemini PR review workflow"
@@ -775,6 +880,7 @@ usage_gemini() {
     echo "  install   Add Gemini CLI hooks and workflow to your project (first-time setup)"
     echo "  update    Pull the latest Gemini CLI hooks and workflow"
     echo "  sync      Install if missing, update if present (converge state)"
+    echo "  prune     Remove stale files from older installer layouts"
     echo ""
     echo "This downloads:"
     echo "  .gemini/hooks/                             - Gemini CLI hook adapters"
@@ -797,6 +903,7 @@ usage_codex() {
     echo "  install   Add Codex hooks to your project (first-time setup)"
     echo "  update    Pull the latest Codex hooks"
     echo "  sync      Install if missing, update if present (converge state)"
+    echo "  prune     Remove stale files from older installer layouts"
     echo ""
     echo "This downloads:"
     echo "  .codex/hooks/                             - Codex hook adapters"
@@ -816,6 +923,7 @@ usage_notebooklm() {
     echo "  install   Add NotebookLM sync workflow to your project (first-time setup)"
     echo "  update    Pull the latest NotebookLM sync workflow"
     echo "  sync      Install if missing, update if present (converge state)"
+    echo "  prune     Remove stale files from older installer layouts"
     echo ""
     echo "This downloads:"
     echo "  .github/workflows/sync-notebooklm.yml  - Automated NotebookLM sync on push to main"
@@ -837,6 +945,7 @@ usage_all() {
     echo "  install   Install missing providers (skips already-installed ones)"
     echo "  update    Update installed providers (skips missing ones)"
     echo "  sync      Converge — install missing providers AND update installed ones"
+    echo "  prune     Remove stale files from older installer layouts"
     echo ""
     echo "Use 'sync' when you want the repo to match upstream without worrying"
     echo "about per-provider state. Use 'install' or 'update' when you want"
@@ -885,6 +994,7 @@ usage_main() {
     echo "  install   First-time setup — downloads config and workflows"
     echo "  update    Pull the latest config from ai-dev-foundry"
     echo "  sync      Install missing + update installed (converge state)"
+    echo "  prune     Remove stale files from older installer layouts"
     echo ""
     echo "Global options:"
     echo "  --gemini               Also install Gemini workflows (with claude)"
@@ -992,9 +1102,18 @@ handle_provider_command() {
 }
 
 case "$AGENT" in
+    prune)
+        prune_stale_files
+        exit 0
+        ;;
     claude|gemini|codex|notebooklm)
         if [[ "${1:-}" == "install" || "${1:-}" == "update" || "${1:-}" == "sync" ]]; then
             check_script_version
+        fi
+        # Per-provider 'prune' is an alias for the top-level prune (repo-wide).
+        if [[ "${1:-}" == "prune" ]]; then
+            prune_stale_files
+            exit 0
         fi
         handle_provider_command "$AGENT" "${1:-}"
         ;;
@@ -1019,6 +1138,7 @@ case "$AGENT" in
             install) install_config ;;
             update)  update_config ;;
             sync)    sync_config ;;
+            prune)   prune_stale_files ;;
             *)       usage_all; exit 1 ;;
         esac
         ;;
