@@ -595,7 +595,7 @@ else
         "Expected 'Quick start:' in usage_main()"
 fi
 
-if grep -A40 'usage_main()' "$MANAGE_SCRIPT" | grep -q 'all install'; then
+if grep -A60 'usage_main()' "$MANAGE_SCRIPT" | grep -q 'all install'; then
     assert "usage_main() shows 'all install' example" "pass"
 else
     assert "usage_main() shows 'all install' example" "fail"
@@ -962,6 +962,74 @@ if grep -q 'sync.*Install if missing, update if present' "$MANAGE_SCRIPT"; then
     assert "per-provider usage text documents sync" "pass"
 else
     assert "per-provider usage text documents sync" "fail"
+fi
+
+echo
+
+# ── stale-file detection and prune ──────────────────────────────────
+
+echo "=== stale-file detection / prune ==="
+
+if grep -q '^KNOWN_STALE_FILES=(' "$MANAGE_SCRIPT"; then
+    assert "KNOWN_STALE_FILES registry is defined" "pass"
+else
+    assert "KNOWN_STALE_FILES registry is defined" "fail"
+fi
+
+if grep -q '^detect_stale_files()' "$MANAGE_SCRIPT" && grep -q '^warn_if_stale_files()' "$MANAGE_SCRIPT"; then
+    assert "detect/warn helpers are defined" "pass"
+else
+    assert "detect/warn helpers are defined" "fail"
+fi
+
+if grep -q '^prune_stale_files()' "$MANAGE_SCRIPT"; then
+    assert "prune_stale_files() is defined" "pass"
+else
+    assert "prune_stale_files() is defined" "fail"
+fi
+
+# warn_if_stale_files must be called from install/update/sync endings
+if [[ "$(grep -c 'warn_if_stale_files$' "$MANAGE_SCRIPT")" -ge 3 ]]; then
+    assert "warn_if_stale_files is called from install/update/sync" "pass"
+else
+    assert "warn_if_stale_files is called from install/update/sync" "fail"
+fi
+
+# 'prune' is wired as a top-level command
+if grep -qE 'prune\)[[:space:]]*$' "$MANAGE_SCRIPT"; then
+    assert "'prune' subcommand is wired into main dispatch" "pass"
+else
+    assert "'prune' subcommand is wired into main dispatch" "fail"
+fi
+
+# Network-free test: seed a stale file, run 'prune' with assume-yes,
+# and verify the file is gone. Also verify prune's pre-removal listing
+# mentions the stale file, which exercises the same detect_stale_files
+# code path used by warn_if_stale_files.
+_TMPDIR=$(mktemp -d)
+cp "$MANAGE_SCRIPT" "$_TMPDIR/installer.sh"
+chmod +x "$_TMPDIR/installer.sh"
+(
+    cd "$_TMPDIR" && git init -q && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+    mkdir -p .claude/hooks
+    echo "orphan" > .claude/hooks/bash-patterns.toml
+    echo "orphan" > .claude/hooks/bash-patterns.linux.toml
+    out=$(AIDF_ASSUME_YES=1 "./installer.sh" prune 2>&1) || exit 60
+    echo "$out" | grep -q '.claude/hooks/bash-patterns.toml' || exit 61
+    echo "$out" | grep -q '.claude/hooks/bash-patterns.linux.toml' || exit 62
+    [[ -e .claude/hooks/bash-patterns.toml ]] && exit 63
+    [[ -e .claude/hooks/bash-patterns.linux.toml ]] && exit 64
+    # 'No stale files' path when nothing remains
+    out=$(AIDF_ASSUME_YES=1 "./installer.sh" prune 2>&1) || exit 65
+    echo "$out" | grep -q 'No stale files to prune' || exit 66
+    exit 0
+)
+_rc=$?
+rm -rf "$_TMPDIR"
+if [[ $_rc -eq 0 ]]; then
+    assert "prune detects + removes stale files (network-free)" "pass"
+else
+    assert "prune detects + removes stale files (network-free)" "fail" "rc=$_rc"
 fi
 
 echo
