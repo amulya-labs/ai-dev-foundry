@@ -24,11 +24,12 @@ How it works today: the tool's native prompt fires *first*, before the hook gets
 | Tool | Start with |
 |------|------------|
 | **Claude Code** | `claude --dangerously-skip-permissions` |
+| **Codex CLI** | `codex --full-auto` *(sandboxed)* &nbsp;·&nbsp; `codex --dangerously-bypass-approvals-and-sandbox` *(no sandbox)* |
 | **Gemini CLI** | `gemini --yolo` (or `-y`) |
 
-> **What stays in place.** The hook's `[deny.*]` patterns still fire in every mode above — destructive commands (`rm -rf /`, `dd of=/dev/*`, and similar) remain blocked. `[ask.*]` patterns still prompt for confirmation (e.g., force-pushes to `main`, destructive Docker/kubectl operations); `[allow.*]` patterns still auto-approve silently. You're not disabling the policy, you're promoting it to the sole gate.
+> **What stays in place.** The hook's `[deny.*]` patterns still fire in every mode above — destructive commands (`rm -rf /`, `dd of=/dev/*`, and similar) remain blocked. `[ask.*]` patterns still prompt for confirmation under Claude Code and Gemini CLI (e.g., force-pushes to `main`, destructive Docker/kubectl operations); `[allow.*]` patterns still auto-approve silently. You're not disabling the policy, you're promoting it to the sole gate.
 
-> **Codex isn't in this table yet.** Empirical testing shows the project-level Codex hook isn't being invoked by `codex` as currently wired in this repo, so promoting Codex's prompt layer to "hook is the gate" wouldn't be honest — there's no gate active under Codex right now. Tracking the fix in [#108](https://github.com/amulya-labs/ai-dev-foundry/issues/108).
+> **Codex specifics.** Codex's hook protocol is **deny-only** — only `[deny.*]` patterns can be enforced through the hook. `[ask.*]` patterns are passed through silently and Codex's own approval policy handles the prompt instead (so under bypass mode, `[ask.*]` commands run without prompting; under default approval mode, Codex's UI prompts). `[allow.*]` patterns are also silent; Codex's own trusted-command list determines whether a prompt fires. The deny gate is the meaningful guarantee.
 
 ### What this isn't
 
@@ -79,7 +80,7 @@ See [docs/agents.md](docs/agents.md) for per-agent descriptions, domain grouping
 
 ## Hooks
 
-A shared Bash-command validation engine lives in `.ai-dev-foundry/shared/hooks/bash-policy/`, with thin adapters in `.claude/hooks/`, `.gemini/hooks/`, and `.codex/hooks/` — so the same allow/ask/deny policy can be reused across Claude Code and Gemini CLI without duplicating rules. The Codex adapter ships but its integration with `codex` is currently not invoking the hook; see [#108](https://github.com/amulya-labs/ai-dev-foundry/issues/108). opencode is still pending upstream support for a comparable project hook surface.
+A shared Bash-command validation engine lives in `.ai-dev-foundry/shared/hooks/bash-policy/`, with thin adapters in `.claude/hooks/`, `.gemini/hooks/`, and `.codex/hooks/` — so the same allow/ask/deny policy is reused across Claude Code, Codex CLI, and Gemini CLI without duplicating rules. Under Codex the protocol is deny-only (see the YOLO section above); ask/allow patterns defer to Codex's own approval policy. opencode is still pending upstream support for a comparable project hook surface.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the hook architecture, pattern categories, OS overlays, and the Claude `settings.json` × hook precedence matrix.
 

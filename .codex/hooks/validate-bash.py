@@ -27,13 +27,27 @@ def _read_tool_input(input_data: dict) -> dict:
 
 
 def output_decision(decision: str, reason: str) -> None:
+    """Emit a Codex-compatible PreToolUse hook response.
+
+    Codex's PreToolUse hook protocol is deny-only: only `permissionDecision: "deny"`
+    (with a non-empty reason) is recognized. Any other value — including "allow"
+    or "ask" — is rejected by Codex with "unsupported permissionDecision:...".
+
+    Mapping for our 3-way (allow/ask/deny) policy under Codex:
+      - deny  -> emit the deny JSON; Codex blocks the command.
+      - allow -> emit nothing; Codex proceeds normally.
+      - ask   -> emit nothing; defer to Codex's own approval policy, which
+                 already prompts for commands outside its trusted set.
+    """
+    if decision != "deny":
+        return
     print(
         json.dumps(
             {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
-                    "permissionDecision": decision,
-                    "permissionDecisionReason": reason,
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason or "Blocked by ai-dev-foundry deny pattern",
                 }
             }
         )

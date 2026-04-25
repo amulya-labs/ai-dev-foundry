@@ -119,7 +119,13 @@ SAMPLE_COMMANDS = [
 @pytest.mark.parametrize("command,expected_verdict", SAMPLE_COMMANDS)
 @pytest.mark.parametrize("provider", list(ADAPTERS.keys()))
 def test_adapter_decision_matches_policy(provider: str, command: str, expected_verdict: str) -> None:
-    """Adapter's emitted decision agrees with the shared policy engine."""
+    """Adapter's emitted decision agrees with the shared policy engine.
+
+    Output protocol differs by provider:
+      - Claude / Gemini: emit a JSON decision for every verdict (allow/ask/deny).
+      - Codex: deny-only protocol — emit JSON only for deny; produce no stdout
+        for allow or ask. Codex rejects any other permissionDecision value.
+    """
     if expected_verdict != expected_decision(provider, command):
         pytest.skip(
             f"sample command '{command}' classified differently by policy on this OS; "
@@ -130,19 +136,31 @@ def test_adapter_decision_matches_policy(provider: str, command: str, expected_v
     rc, stdout, stderr = run_adapter(provider, payload)
     assert rc == 0, f"{provider} adapter exited {rc}: stderr={stderr}"
 
+    if provider == "codex" and expected_verdict != "deny":
+        # Codex hook protocol: emit nothing for allow/ask. Codex's own approval
+        # policy fills in for the missing prompt mechanism on `ask` patterns.
+        assert not stdout.strip(), (
+            f"codex adapter must produce no stdout for verdict={expected_verdict}; "
+            f"got: {stdout!r}"
+        )
+        return
+
     if not stdout.strip():
-        # All three adapters exit silently when the policy verdict is "allow"
-        # via the engine's no-output path; this is acceptable.
-        # But for our sample commands we expect explicit output, so flag it.
         pytest.fail(f"{provider} adapter produced no stdout for command={command!r}")
 
     decision_payload = json.loads(stdout)
 
-    if provider in ("claude", "codex"):
+    if provider == "claude":
         block = decision_payload["hookSpecificOutput"]
         assert block["hookEventName"] == "PreToolUse"
         assert block["permissionDecision"] == expected_verdict
         assert "permissionDecisionReason" in block
+    elif provider == "codex":
+        # Only reached when expected_verdict == "deny".
+        block = decision_payload["hookSpecificOutput"]
+        assert block["hookEventName"] == "PreToolUse"
+        assert block["permissionDecision"] == "deny"
+        assert block["permissionDecisionReason"], "Codex requires non-empty reason on deny"
     elif provider == "gemini":
         assert decision_payload["decision"] == expected_verdict
         assert "reason" in decision_payload
