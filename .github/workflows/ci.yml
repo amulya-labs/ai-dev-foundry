@@ -185,6 +185,11 @@ jobs:
           echo "Running bash hook tests..."
           tests/test-validate-bash.sh
 
+      - name: Run wrapper-logging tests
+        run: |
+          echo "Running wrapper-level logging tests..."
+          tests/test-wrapper-logging.sh
+
   validate-manage-configs:
     name: Validate manage-ai-configs.sh
     runs-on: ubuntu-latest
