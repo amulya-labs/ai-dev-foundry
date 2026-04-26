@@ -81,7 +81,14 @@ def make_payload(provider: str, command: str) -> dict:
 
 
 def expected_decision(provider: str, command: str) -> str:
-    """Decision the shared policy engine produces for this command."""
+    """Decision the shared policy engine produces for this command.
+
+    The ``tool`` and ``phase`` values here must mirror what each adapter
+    passes to ``evaluate_request`` inside its ``validate-bash.py``.  If the
+    request shape of any adapter changes (e.g. a key rename or a new phase
+    string), update this helper to match or the skip-condition in
+    ``test_adapter_decision_matches_policy`` will silently diverge.
+    """
     request = {
         "provider": provider,
         "phase": "pre_tool_use" if provider != "gemini" else "before_tool",
@@ -201,6 +208,9 @@ def test_gemini_adapter_reads_camelcase_toolinput() -> None:
     }
     rc, stdout, stderr = run_adapter("gemini", payload)
     assert rc == 0
-    if stdout.strip():
-        # If a decision is emitted at all it must still be the right one.
-        assert json.loads(stdout)["decision"] == "allow"
+    # Gemini's adapter must always emit a JSON decision (3-way protocol).
+    # An empty stdout here means camelCase parsing silently failed — fail loudly.
+    assert stdout.strip(), (
+        "gemini adapter produced no stdout; camelCase toolInput parsing likely failed"
+    )
+    assert json.loads(stdout)["decision"] == "allow"
