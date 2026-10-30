@@ -488,6 +488,9 @@ patterns = [
     "^pip install",
     # Path-based virtual environments must retain the registry-install guard.
     "^(?:[\\w./-]+/)?[\\w.-]*venv/bin/pip[0-9.]*\\s+install(?:\\s|$)",
+    # Python module entry points (including -I -m pip and -mpip) must not
+    # bypass package-manager checks. Keep all pip module operations guarded.
+    "^(?:[\\w./-]+/)?[\\w.-]*venv/bin/python[0-9.]*\\s+.*?-[A-Za-z]*m\\s*pip(?:\\s|$)",
     "^npm install (?!\\.)(?!--)(?!\\d*>)(.+)",
     "^yarn add",
     "^brew install",
@@ -502,6 +505,13 @@ patterns = [
     "^insmod ",
     "^modprobe ",
     "^rmmod ",
+]
+
+[ask.venv_inline_execution]
+description = "Virtual-environment Python executing inline code or stdin"
+patterns = [
+    "^(?:[\\w./-]+/)?[\\w.-]*venv/bin/python[0-9.]*\\s+(?:.*\\s)?-[A-Za-z]*c",
+    "^(?:[\\w./-]+/)?[\\w.-]*venv/bin/python[0-9.]*\\s+(?:-[A-Za-z]+\\s+)*-(?:\\s|$)",
 ]
 
 # =============================================================================

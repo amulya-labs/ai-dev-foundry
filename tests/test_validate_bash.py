@@ -203,6 +203,20 @@ class TestStripLineContinuations:
         assert validate_bash.strip_line_continuations(input_cmd) == expected
 
 
+@pytest.mark.parametrize("command", [": > report.txt", "{ echo x; } > report.txt"])
+def test_redirect_allow_respects_custom_ask_rule(compiled_patterns, command):
+    """A valid artifact destination cannot bypass a configured ASK rule."""
+    extra = validate_bash.compile_patterns(
+        {"ask": {"protected_report": {"patterns": [r">\s*report\.txt"]}}}, "ask"
+    )
+    decision, reason = validate_bash.validate_command(
+        command, compiled_patterns["deny"], extra + compiled_patterns["ask"],
+        compiled_patterns["allow"],
+    )
+    assert decision == "ask"
+    assert "ask.protected_report" in reason
+
+
 class TestSplitCommands:
     """Test command splitting on &&, ||, ;."""
 

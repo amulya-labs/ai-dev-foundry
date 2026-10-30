@@ -494,9 +494,45 @@ def mask_literal_pipes(segment: str) -> str:
     """
     out = []
     quote = None
+    heredocs = []
     i = 0
     while i < len(segment):
         char = segment[i]
+        if quote is None and segment[i:i + 3] == "<<<":
+            out.append("<<<")
+            i += 3
+            continue
+        if quote is None and segment[i:i + 2] == "<<" and segment[i:i + 3] != "<<<":
+            delim, strip_tabs, end = _parse_heredoc_delim(segment, i + 2)
+            if not delim:
+                return segment  # Unknown heredoc syntax: keep all guards visible.
+            quoted = bool(re.match(r'''<<-?\s*['"]''', segment[i:end]))
+            heredocs.append((delim, strip_tabs, quoted))
+            out.append(segment[i:end])
+            i = end
+            continue
+        if char == "\n" and quote is None and heredocs:
+            out.append(char)
+            i += 1
+            for delim, strip_tabs, quoted in heredocs:
+                while i < len(segment):
+                    end = segment.find("\n", i)
+                    end = len(segment) if end == -1 else end + 1
+                    line = segment[i:end]
+                    candidate = line.rstrip("\n")
+                    if strip_tabs:
+                        candidate = candidate.lstrip("\t")
+                    # Quotes in heredoc data must not change shell quote state.
+                    # Unquoted bodies may execute substitutions: preserve their
+                    # pipes conservatively for the existing execution guards.
+                    out.append(line.replace("|", " ") if quoted else line)
+                    i = end
+                    if candidate == delim:
+                        break
+                else:
+                    return segment  # Unterminated heredoc; do not mask pipes.
+            heredocs = []
+            continue
         if char == "\\" and quote != "'" and i + 1 < len(segment):
             following = segment[i + 1]
             out.append("\\ " if following == "|" else segment[i:i + 2])
@@ -520,14 +556,17 @@ def mask_literal_pipes(segment: str) -> str:
                 quote = None
         out.append(" " if char == "|" and quote else char)
         i += 1
-    return "".join(out)
+    # An unmatched quote is not evidence that the remaining pipes are literal.
+    return segment if quote is not None or heredocs else "".join(out)
 
 
 def safe_redirect_only(segment: str) -> bool | None:
     """Validate redirects after ':' or a closing group without executing shell.
 
-    Only literal relative/temp destinations and /dev/null qualify. Unknown
-    expansions, traversal, extra commands, and other absolute paths still ask.
+    Only visible data artifacts in relative/temp paths and /dev/null qualify.
+    Dotfiles, non-artifact extensions, unknown expansions, traversal, extra commands,
+    and other absolute paths still ask. This is an allow candidate only; the
+    caller must evaluate deny and ask rules first.
     """
     match = re.match(r"^(?:\}|:)\s*(?=\d*>)(.*)$", segment, re.DOTALL)
     if not match:
@@ -545,6 +584,11 @@ def safe_redirect_only(segment: str) -> bool | None:
         if target.startswith(('"', "'")):
             target = target[1:-1]
         if not target or re.search(r"[^\w./-]", target) or ".." in target.split("/"):
+            return False
+        if target != "/dev/null" and (
+            any(part.startswith(".") and part != "." for part in target.split("/"))
+            or not target.endswith((".txt", ".log", ".out", ".csv", ".tsv", ".json", ".md"))
+        ):
             return False
         if target.startswith("/") and not (
             target.startswith(("/tmp/", "/var/tmp/")) or target == "/dev/null"
@@ -599,19 +643,18 @@ def validate_command(
         if matched:
             return "deny", f"Blocked: '{cleaned}' matches {section}"
 
-        redirect_safe = safe_redirect_only(cleaned)
-        if redirect_safe is True:
-            continue
-        if redirect_safe is False:
-            final_decision = "ask"
-            final_reason = f"'{cleaned}' has an unverified redirect destination"
-            continue
-
         matched, section = check_patterns(cleaned, ask_patterns)
         if matched:
             if final_decision != "ask":
                 final_decision = "ask"
                 final_reason = f"'{cleaned}' matches {section}"
+            continue
+
+        redirect_safe = safe_redirect_only(cleaned)
+        if redirect_safe is not None:
+            if not redirect_safe and final_decision != "ask":
+                final_decision = "ask"
+                final_reason = f"'{cleaned}' has an unverified redirect destination"
             continue
 
         matched, _ = check_patterns(cleaned, allow_patterns)
