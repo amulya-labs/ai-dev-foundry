@@ -486,6 +486,8 @@ patterns = [
     "^apt(-get)? install",
     "^apt(-get)? upgrade",
     "^pip install",
+    # Path-based virtual environments must retain the registry-install guard.
+    "^(?:[\\w./-]+/)?[\\w.-]*venv/bin/pip[0-9.]*\\s+install(?:\\s|$)",
     "^npm install (?!\\.)(?!--)(?!\\d*>)(.+)",
     "^yarn add",
     "^brew install",
@@ -1323,6 +1325,33 @@ patterns = [
     "conda.*/envs/.*/bin/",
     "pipx/venvs/.*/bin/",
     "^/tmp/[^/]+/bin/",
+    # Named environments such as scratchpad/ytm-venv; do not trust every binary.
+    "^(?:[\\w./-]+/)?[\\w.-]*venv/bin/python[0-9.]*(?:\\s|$)",
+]
+
+[allow.session_inspection]
+description = "File comparison, shell syntax checks, and CLI status inspection"
+patterns = [
+    "^cmp(?:\\s|$)",
+    "^(?:/bin/)?sh\\s+-n\\s+(?![-+])[^\\s]+",
+    "^tmux\\s+-V(?:\\s|$)",
+    "^claude\\s+plugin\\s+list(?:\\s|$)",
+    "^claude\\s+auth\\s+status(?:\\s|$)",
+]
+
+[allow.pdf_utilities]
+description = "PDF inspection, text extraction, and preview rendering"
+patterns = [
+    "^(pdfinfo|pdftotext|pdftoppm)(?:\\s|$)",
+]
+
+[allow.getmyorg]
+description = "Reviewed getmyorg diagnostics, local project setup, and planning commands"
+# Keep this scoped to observed commands rather than allowing every subcommand.
+# Include the installed tilde/absolute path and locally built relative path.
+patterns = [
+    "^(?:(?:~/|/|\\./|\\.\\./)[\\w./-]*/)?getmyorg\\s+(doctor|hq|init|refresh|version)(?:\\s|$)",
+    "^(?:(?:~/|/|\\./|\\.\\./)[\\w./-]*/)?getmyorg\\s+semantic-(group|refresh)\\s+plan(?:\\s|$)",
 ]
 
 [allow.system_readonly]

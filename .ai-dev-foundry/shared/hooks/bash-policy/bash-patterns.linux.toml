@@ -8,6 +8,13 @@
 # Sections with the same name as base sections have their patterns APPENDED.
 # New sections are added as-is.
 
+[allow.session_diagnostics]
+description = "Failed-service and filesystem-header inspection"
+patterns = [
+    "^systemctl\\s+--failed(?:\\s+--(?:no-pager|plain|no-legend|all))*\\s*(?=$|[|<>]|[12]>)",
+    "^dumpe2fs\\s+-h(?:\\s|$)",
+]
+
 [ask.network_config]
 description = "Linux network configuration (persistent changes)"
 patterns = [

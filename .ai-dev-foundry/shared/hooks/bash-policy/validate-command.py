@@ -129,9 +129,6 @@ def strip_env_vars(cmd: str) -> str:
         elif rest.startswith("'"):
             end = rest.find("'", 1)
             cmd = rest[end + 1 :] if end > 0 else ""
-        elif rest.startswith("$") and len(rest) > 1 and re.match(r"[A-Za-z_]", rest[1]):
-            var_match = re.match(r"^\$[A-Za-z_][A-Za-z0-9_]*", rest)
-            cmd = rest[var_match.end() :] if var_match else rest
         else:
             val_match = re.match(r"^[^\s]*\s*", rest)
             cmd = rest[val_match.end() :] if val_match else ""
@@ -480,6 +477,8 @@ def clean_segment(segment: str) -> str:
     segment = strip_bash_c_wrapper(segment)
     segment = strip_control_flow_keyword(segment)
     segment = _strip_case_label(segment)
+    # Negation changes exit status, not the command's permission requirements.
+    segment = re.sub(r"^(?:!\s+)+", "", segment)
     segment = strip_env_vars(segment)
     if not segment.strip():
         return ""
@@ -487,10 +486,84 @@ def clean_segment(segment: str) -> str:
     return segment
 
 
+def mask_literal_pipes(segment: str) -> str:
+    """Hide quoted/escaped pipes from pipeline rules, preserving substitutions.
+
+    This view is only used by ask.code_execution. Other rules still inspect the
+    original arguments (for example SQL and git mutation flags).
+    """
+    out = []
+    quote = None
+    i = 0
+    while i < len(segment):
+        char = segment[i]
+        if char == "\\" and quote != "'" and i + 1 < len(segment):
+            following = segment[i + 1]
+            out.append("\\ " if following == "|" else segment[i:i + 2])
+            i += 2
+            continue
+        if segment[i:i + 2] == "$(" and quote != "'":
+            end = _find_matching_paren(segment, i + 2)
+            out.append("$(" + mask_literal_pipes(segment[i + 2:end - 1]) + ")")
+            i = end
+            continue
+        if char == "`" and quote != "'":
+            end = segment.find("`", i + 1)
+            if end != -1:
+                out.append("`" + mask_literal_pipes(segment[i + 1:end]) + "`")
+                i = end + 1
+                continue
+        if char in ("'", '"'):
+            if quote is None:
+                quote = char
+            elif quote == char:
+                quote = None
+        out.append(" " if char == "|" and quote else char)
+        i += 1
+    return "".join(out)
+
+
+def safe_redirect_only(segment: str) -> bool | None:
+    """Validate redirects after ':' or a closing group without executing shell.
+
+    Only literal relative/temp destinations and /dev/null qualify. Unknown
+    expansions, traversal, extra commands, and other absolute paths still ask.
+    """
+    match = re.match(r"^(?:\}|:)\s*(?=\d*>)(.*)$", segment, re.DOTALL)
+    if not match:
+        return None
+    rest = match.group(1)
+    while rest:
+        fd = re.match(r"\d*>&\d+(?:\s+|$)", rest)
+        if fd:
+            rest = rest[fd.end():].lstrip()
+            continue
+        redirect = re.match(r'''\d*>>?\s*("[^"]*"|'[^']*'|[^\s;&|<>]+)(?:\s+|$)''', rest)
+        if not redirect:
+            return False
+        target = redirect.group(1)
+        if target.startswith(('"', "'")):
+            target = target[1:-1]
+        if not target or re.search(r"[^\w./-]", target) or ".." in target.split("/"):
+            return False
+        if target.startswith("/") and not (
+            target.startswith(("/tmp/", "/var/tmp/")) or target == "/dev/null"
+        ):
+            return False
+        rest = rest[redirect.end():].lstrip()
+    return True
+
+
 def check_patterns(segment: str, patterns: list[CompiledPattern]) -> tuple[bool, str]:
     """Check if segment matches any compiled pattern."""
+    operator_view = None
     for pattern in patterns:
-        if pattern.regex.search(segment):
+        subject = segment
+        if pattern.section == "ask.code_execution":
+            if operator_view is None:
+                operator_view = mask_literal_pipes(segment)
+            subject = operator_view
+        if pattern.regex.search(subject):
             return True, pattern.section
     return False, ""
 
@@ -525,6 +598,14 @@ def validate_command(
         matched, section = check_patterns(cleaned, deny_patterns)
         if matched:
             return "deny", f"Blocked: '{cleaned}' matches {section}"
+
+        redirect_safe = safe_redirect_only(cleaned)
+        if redirect_safe is True:
+            continue
+        if redirect_safe is False:
+            final_decision = "ask"
+            final_reason = f"'{cleaned}' has an unverified redirect destination"
+            continue
 
         matched, section = check_patterns(cleaned, ask_patterns)
         if matched:
